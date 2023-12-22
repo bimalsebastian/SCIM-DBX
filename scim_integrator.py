@@ -1,0 +1,1042 @@
+import log_decorator
+import log
+import msal
+import requests
+import pandas as pd
+import json
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache 
+import time
+from ratelimit import limits, RateLimitException, sleep_and_retry
+
+class scim_integrator():
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir ):
+        self.config = config
+        self.dbx_config = dbx_config
+        self.groups_to_sync = groups_to_sync
+        self.token = ''
+        self.token_dbx = ''
+        self.log_file_name = log_file_name
+        self.log_file_dir = log_file_dir
+        self.logger_obj = log.get_logger(log_file_name=self.log_file_name, log_dir=self.log_file_dir)
+        self.MAX_GET_CALLS_PER_SEC = 20
+        self.MAX_PATCH_CALLS_PER_SEC = 2
+        self.MAX_POST_CALLS_PER_SEC = 5
+        
+
+    # global token 
+    # global token_dbx     
+   
+    def make_graph_get_call(self,url, pagination=True, params = {},key = ''):
+
+        token = self.token
+
+        headers = {'Authorization': 'Bearer ' + token}
+        graph_results = []
+        while url:
+            try:
+                if(len(params)>0):
+                    self.logger_obj.debug(f"Logging API call params{params}")
+                    graph_result = requests.get(url=url, headers=headers, params = params).json()
+                else:
+                    graph_result = requests.get(url=url, headers=headers).json()
+                if 'value' in graph_result:
+                    graph_results.extend(graph_result['value'])
+                else: 
+                    graph_results.append(graph_result)
+                if (pagination == True):
+                    url = graph_result['@odata.nextLink']
+                else:
+                    url = None
+            except:
+                break
+        if key == '':        
+            return graph_results
+        else: 
+            return key, graph_results
+
+    def auth_aad(self,isAccount =True):
+        if isAccount:
+            url = f"https://login.microsoftonline.com/{self.dbx_config['azure_tenant_id']}/oauth2/v2.0/token"
+        
+            post_data = {'client_id': self.dbx_config['client_id'],
+                        'scope' :'2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default',
+                        'client_secret': self.dbx_config['client_secret'],
+                        'grant_type': 'client_credentials'}
+            initial_header = {'Content-type': 'application/x-www-form-urlencoded'}
+            res = requests.post(url, data=post_data, headers=initial_header)
+            res.raise_for_status()
+
+            self.token_dbx = res.json().get("access_token")
+            
+        else:
+            client = msal.ConfidentialClientApplication(self.config['client_id'], authority=self.config['authority'], client_credential=self.config['client_secret'])
+            token_result = client.acquire_token_for_client(scopes=self.config['scope'])
+            self.token = token_result['access_token']
+    def get_spn_details(self, service_principals):
+        spns_df = pd.DataFrame()
+        for idx, spn in service_principals.iterrows():
+            url = f'https://graph.microsoft.com/v1.0/servicePrincipals/{spn["id"]}'
+            res = self.make_graph_get_call(url, False)
+            res_json = json.dumps(res)
+            df = pd.read_json(res_json,dtype='unicode',convert_dates=False)
+            spns_df = pd.concat([spns_df,df])
+        return spns_df
+
+
+    @lru_cache(maxsize=256, typed=True)
+    def get_all_groups_aad(self,with_members = False):
+        batch_size = 10
+        split_count = round(len(self.groups_to_sync)/batch_size,0)
+        groups_to_sync_split = np.array_split(self.groups_to_sync, split_count) 
+        filter_params = []
+        user_groups_df = pd.DataFrame()
+
+        for group_set in groups_to_sync_split:
+            filter_expression = ', '.join(['"{}"'.format(value) for value in group_set])
+            filter_params.append({'$filter' : f"displayName in ({filter_expression})",'$select':'id,displayName'})
+        threads= []
+        master_list = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for filter_param in filter_params:
+                url = 'https://graph.microsoft.com/v1.0/groups'
+                threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
+            for task in as_completed(threads):
+                groups_json = json.dumps(task.result())
+                groups_df = pd.read_json(groups_json,dtype='unicode',convert_dates=False)
+                master_list = pd.concat([master_list,groups_df])
+
+        threads_sub= []
+        if with_members:
+            user_list = []
+            
+            with ThreadPoolExecutor(max_workers=20) as executor_sub:
+                for index, row in master_list.iterrows():
+                    # url = 'https://graph.microsoft.com/v1.0/groups'
+                    url = 'https://graph.microsoft.com/beta/groups'
+                    params = {'$select':'id, displayName, userPrincipalName,appDisplayName, appId'}
+
+                    group_id = row['id']
+                    threads_sub.append(executor_sub.submit(self.make_graph_get_call, url+'/'+ group_id+'/members', True, params =params , key= group_id))
+                for sub_task in as_completed(threads_sub):
+                    result =sub_task.result()
+                    user_list = json.dumps(result[1])
+                    df = pd.read_json(user_list,dtype='unicode',convert_dates=False)
+                    df['group_id'] = result[0]
+                    # print(result[0])
+                    user_groups_df = pd.concat([user_groups_df,df])
+                
+        else:   
+            return master_list
+                
+        return user_groups_df
+    @lru_cache(maxsize=256, typed=True)
+    def get_all_users_aad(self):
+        url = 'https://graph.microsoft.com/v1.0/users'
+        users = self.make_graph_get_call(url, pagination=True)
+        users_json = json.dumps(users)
+
+        
+
+        users_df = pd.read_json(users_json,dtype='unicode',convert_dates=False)
+        
+        
+        return users_df
+
+    def get_user_details_dbx(self,ids_string):
+        try:
+            account_id = self.dbx_config["account_id"] 
+            token_result = self.token_dbx
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+            params = {'filter': ids_string}
+            req = requests.get(url=url, headers=headers, params = params)
+            assert req.status_code == 200
+            df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+
+        
+            counter = 0
+            for resource in req.json()['Resources']:
+
+                df.loc[counter,'displayName'] = resource['displayName']
+                df.loc[counter,'active'] = resource['active']
+                df.loc[counter,'id'] = resource['id']
+                df.loc[counter,'userName'] = resource['userName']
+                df.loc[counter,'applicationId'] = np.nan
+                if 'externalId' in resource:
+                    df.loc[counter,'externalId'] = resource['externalId']
+                counter+=1
+            return df
+        
+        except Exception as e:
+            self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+            raise
+
+    def get_spn_details_dbx(self,ids_string):
+        try:
+            account_id = self.dbx_config["account_id"] 
+            token_result = self.token_dbx
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
+            params = {'filter': ids_string}
+            req = requests.get(url=url, headers=headers, params = params)
+            assert req.status_code == 200
+            df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+
+        
+            counter = 0
+            for resource in req.json()['Resources']:
+
+                df.loc[counter,'displayName'] = resource['displayName']
+                df.loc[counter,'active'] = resource['active']
+                df.loc[counter,'id'] = resource['id']
+                df.loc[counter,'userName'] = np.nan
+                df.loc[counter,'applicationId'] = resource['applicationId']
+                if 'externalId' in resource:
+                    df.loc[counter,'externalId'] = resource['externalId']
+                counter+=1
+
+            return df
+        except Exception as e:
+            self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+            raise
+    def get_all_user_groups_dbx(self):
+        try:
+            batch_size = 9
+            account_id = self.dbx_config["account_id"]
+            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Users"
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
+            params = {'startIndex': '1', 'count': '100'}
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            try:
+                graph_results = []
+                index = 0
+                totalResults = 100
+                itemsPerPage = 10
+                while index < totalResults: 
+                    params = {'startIndex': str(index), 'count': itemsPerPage}
+                    retry_counter = 0
+                    while True:
+                        req = requests.get(url=url, headers=headers, params=params)
+                        if req.status_code == 200:
+                            totalResults = req.json()['totalResults']
+                            itemsPerPage = req.json()['itemsPerPage']
+                            index += int(itemsPerPage)
+                            graph_results.append(req.json()) 
+                            break
+                        else:
+                            self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                            if retry_counter <= 3:
+                                time.sleep(1)
+                                retry_counter+=1
+                            else:
+                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                                break
+                                
+                        
+                    
+                # df = pd.DataFrame(index=range(totalResults))
+                counter = 0
+                ids = []
+                groups_df = pd.DataFrame()
+                for result in graph_results:
+                    resource_items = result['Resources']
+                    for resource in resource_items: 
+                        if 'members' in resource:
+                            counter=0
+                            df = pd.DataFrame(index = range(len(resource['members'])))
+                            for group in resource['members']:
+                                
+                                df.loc[counter,'group_displayName'] = resource['displayName']
+                                if 'externalId' in resource:
+                                    df.loc[counter,'group_externalId'] = resource['externalId']
+                                df.loc[counter,'group_id'] = resource['id']
+                                df.loc[counter,'user_id'] = group['value']
+                                ids.append(group['$ref'])
+                                counter+=1
+                            groups_df = pd.concat([groups_df,df])
+                        else:
+                            df = pd.DataFrame(index = range(1))
+                            df.loc[counter,'group_displayName'] = resource['displayName']
+                            if 'externalId' in resource:
+                                        df.loc[counter,'group_externalId'] = resource['externalId']
+                            df.loc[counter,'group_id'] = resource['id']
+                            df.loc[counter,'user_id'] = np.nan
+                            groups_df = pd.concat([groups_df,df])
+                
+                user_ids = []
+                spn_ids = []
+                group_ids = []
+                for id in ids:
+                    if 'Users' in id:
+                        user_ids.append(id.replace('Users/',''))
+                    elif 'ServicePrincipals' in id:
+                        spn_ids.append(id.replace('ServicePrincipals/',''))
+                    elif 'Groups' in id:
+                        group_ids.append(id.replace('Groups/',''))
+                
+                group_list_df = pd.DataFrame(index =range(len(group_ids)), columns=['displayName','active','id','userName','applicationId'])
+                counter =0
+                for group_id in group_ids:
+                    group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
+                    counter+=1
+        
+
+                user_list_df=self.get_users_with_ids_dbx(user_ids)
+                spn_list_df=self.get_spns_with_ids_dbx(spn_ids)
+                user_list_df = user_list_df[user_list_df['id'].notna()]
+                spn_list_df = spn_list_df[spn_list_df['id'].notna()]
+
+                user_list_df = pd.concat([user_list_df,spn_list_df,group_list_df])
+                user_list_df = user_list_df.merge(groups_df, left_on=['id'], right_on=['user_id'], how='inner')
+                user_list_df =user_list_df[user_list_df['id'].notna()]
+                return user_list_df
+            
+            except Exception as e:
+                self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+                raise
+            # display(groups_df.drop_duplicates())
+        except Exception as X:
+            self.logger_obj.error(f"Exception {X}")
+    def get_users_with_ids_dbx(self,ids):
+        try:
+            batch_size = 9
+            account_id = self.dbx_config["account_id"]
+            ids = np.unique(ids)
+            size = round(len(ids)/batch_size,0)
+            user_list_df = pd.DataFrame(index = range(len(ids)))
+            if size > 0:
+                ids = np.array_split(ids, size)
+            else:
+                ids = np.array_split(ids, 1)
+            
+            for id_set in ids: 
+                ids_string = ' or id eq '.join(id_set)
+                ids_string = 'id eq ' + ids_string
+                # print(ids_string)
+                df = self.get_user_details_dbx(ids_string)
+                # display(df)
+                user_list_df = pd.concat([user_list_df,df])
+
+            
+            return user_list_df
+        except Exception as e:
+            self.logger_obj.error(f"Getting User Details with Ids Failed")
+            raise
+
+    def get_spns_with_ids_dbx(self,ids):
+        try:
+            batch_size = 9
+            account_id = self.dbx_config["account_id"]
+            ids = np.unique(ids)
+            size = round(len(ids)/batch_size,0)
+            spn_list_df = pd.DataFrame(index = range(len(ids)))
+            if size > 0:
+                ids = np.array_split(ids, size)
+            else:
+                ids = np.array_split(ids, 1)
+            
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
+            
+            for id_set in ids: 
+                ids_string = ' or id eq '.join(id_set)
+                ids_string = 'id eq ' + ids_string
+                # print(ids_string)
+                df = self.get_spn_details_dbx(ids_string)
+                # display(df)
+                spn_list_df = pd.concat([spn_list_df,df])
+
+            return spn_list_df
+        except Exception as e:
+            self.logger_obj.error(f"Getting SPN Details with Ids Failed")
+            raise
+
+    def get_all_groups_dbx(self):
+        try:
+            account_id = self.dbx_config["account_id"]
+            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
+            params = {'startIndex': '1', 'count': '100'}
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+
+            graph_results = []
+            index = 0
+            totalResults = 100
+            itemsPerPage = 10
+            while index < totalResults:    
+                params = {'startIndex': index, 'count': itemsPerPage}
+                retry_counter = 0
+                while True:
+                    req = requests.get(url=url, headers=headers, params=params)
+                    if req.status_code == 200:
+                        totalResults = req.json()['totalResults']
+                        itemsPerPage = req.json()['itemsPerPage']
+                        index += int(itemsPerPage)
+                        graph_results.append(req.json()) 
+                        break
+                    else:
+                        self.logger_obj.error(f"Fetching All Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                        if retry_counter <= 3:
+                            time.sleep(1)
+                            retry_counter+=1
+                        else:
+                            self.logger_obj.error(f"Fetching All Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                            break
+            df = pd.DataFrame(index=range(totalResults))
+            counter = 0
+            for result in graph_results:
+                resource_item = result['Resources']
+                for resource in resource_item:
+
+                    df.loc[counter,"displayName"] = resource["displayName"]
+                    if 'externalId' in resource:
+                        df.loc[counter,"externalId"] = resource["externalId"]
+                    df.loc[counter,"id"] = resource["id"]
+                    if 'entitelments' in resource:
+                        df.loc[counter,"entitelments"] = resource["entitelments"]
+                    counter+=1
+            return df
+        except Exception as e:
+            self.logger_obj.error(f"Getting All Group Details Failed")
+            raise
+
+    def get_all_users_dbx(self):
+        try:
+            account_id = self.dbx_config["account_id"]
+            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+            
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+
+            graph_results = []
+            index = 0
+            totalResults = 100
+            itemsPerPage = 10
+            params = {'startIndex': index, 'count': itemsPerPage}
+            while index < totalResults:
+                retry_counter = 0
+                while True:
+   
+                    params = {'startIndex': index, 'count': itemsPerPage}
+                    req = requests.get(url=url, headers=headers, params=params)
+                    if req.status_code == 200:
+                        totalResults = req.json()['totalResults']
+                        itemsPerPage = req.json()['itemsPerPage']
+                        index = int(itemsPerPage)
+                        graph_results.append(req.json()) 
+                    else:
+                        self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                        if retry_counter <= 3:
+                            time.sleep(1)
+                            retry_counter+=1
+                        else:
+                            self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                            break
+            df = pd.DataFrame(index=range(totalResults))
+            counter = 0
+            for result in graph_results:
+                resource_item = result['Resources']
+                for resource in resource_item:
+
+                    df.loc[counter,"displayName"] = resource["displayName"]
+                    df.loc[counter,"userName"] = resource["userName"]
+                    df.loc[counter,"active"] = resource["active"]
+                    df.loc[counter,"id"] = resource["id"]
+                    counter+=1
+            return df
+        except Exception as e:
+            self.logger_obj.error(f"Getting All User Details Failed")
+            raise
+    @log_decorator.log_decorator()
+    def create_group_dbx(self,displayName,externalId):
+        try:
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+
+            payload = {
+            "displayName": displayName,
+            "externalId": externalId
+            }
+            retry_counter = 0
+            while True:
+                req = requests.post(url=url, headers=headers, json = payload)
+                if req.status_code == 201:
+                    groups_json = json.dumps(req.json())
+                    df = pd.read_json(groups_json,dtype='unicode',convert_dates=False)
+                    return df
+                else:
+                    self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                        break
+        except Exception as e:
+            self.logger_obj.error(f"Creating User Details Failed")
+            raise
+    
+    
+    @log_decorator.log_decorator()
+    def delete_group_dbx(self,id):
+        retry_counter = 0
+        while True:
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            req = requests.delete(url=url, headers=headers)
+            if req.status_code == 204:
+                self.logger_obj.info(f"delete group status{req.status_code}")
+                return req.status_code
+            else:
+                self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                if retry_counter <= 3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                    break
+   
+    @sleep_and_retry                
+    @limits(calls= 7, period=1)               
+    def create_users_request(self, userName,displayName,externalId):
+        
+        account_id = self.dbx_config["account_id"]
+        url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+        token_result = self.token_dbx
+        payload = {
+            "userName": userName,
+            "displayName": displayName,
+            "externalId" : externalId
+            }
+
+        headers = {'Authorization': 'Bearer ' + token_result }
+
+        req = requests.post(url=url, headers=headers, json = payload)
+        retry_counter = 0
+        while True:
+            if req.status_code == 201 :
+                return req.status_code
+            else:
+                self.logger_obj.error(f"Failed Creating User. {userName}: Attempting Retry") 
+                if retry_counter <= 3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    self.logger_obj.error(f"Failed Creating User. {userName}: Retry failed. Continuing") 
+                    break
+                
+    @sleep_and_retry
+    @limits(calls=7, period=1)      
+    def create_spns_request(self, applicationId,displayName,externalId):
+        account_id = self.dbx_config["account_id"]
+        url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
+        token_result = self.token_dbx
+        payload = {
+            "applicationId": applicationId,
+            "displayName": displayName,
+            "externalId" : externalId
+            }
+
+        headers = {'Authorization': 'Bearer ' + token_result }
+        retry_counter = 0
+        req = requests.post(url=url, headers=headers, json = payload)
+        while True:
+        
+            if req.status_code == 201:
+                    return req.status_code
+            else :
+                self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Attempting Retry") 
+                if retry_counter <= 3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Retry Failed. Continuing") 
+                    break
+                    
+
+    @log_decorator.log_decorator()
+    def create_users_dbx(self,users_to_add):
+        ret_df = pd.DataFrame()
+        threads= []
+        results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:            
+            for idx, row in users_to_add.iterrows():
+                userName = row['userPrincipalName']
+                displayName = row['displayName_x']
+                externalId = row['id_x']
+                threads.append(executor.submit(self.create_users_request, userName,displayName,externalId))
+
+            for task in as_completed(threads):
+                results.append(task.result()) 
+
+        return results
+
+    @log_decorator.log_decorator()
+    def create_spns_dbx(self,spns_to_add):
+        ret_df = pd.DataFrame()
+        threads= []
+        results = []
+        with ThreadPoolExecutor(max_workers=20) as executor:            
+            for idx, row in spns_to_add.iterrows():
+                applicationId = row['appId']
+                displayName = row['displayName_x']
+                externalId = row['id_x']
+                threads.append(executor.submit(self.create_spns_request, applicationId,displayName,externalId))
+
+            for task in as_completed(threads):
+                results.append(task.result()) 
+
+        return results            
+        # return ret_df
+    @log_decorator.log_decorator()    
+    def deactivate_users_dbx(self,users_to_remove):
+        for idx, row in users_to_remove.iterrows():
+            id = row['id_y']
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"
+            token_result = self.token_dbx
+            retry_counter =0
+            while True:
+                
+                try:
+                    headers = {'Authorization': 'Bearer ' + token_result }
+                    payload = {
+                                "schemas": [
+                                "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                                ],
+                                "Operations": [
+                                {
+                                "op": "replace",
+                                "value": {
+                                "active": False
+                                }
+                                }
+                                ]
+                                }
+                    req = requests.patch(url=url, headers=headers, json = payload)
+                    assert req.status_code == 200
+                except:
+                    
+                    self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id}") 
+                    self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        break
+
+    @log_decorator.log_decorator()    
+    def deactivate_spns_dbx(self,spns_to_remove):
+        for idx, row in spns_to_remove.iterrows():
+            id = row['id_y']
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals/{id}"
+            token_result = self.token_dbx
+            retry_counter =0
+            while True:
+                headers = {'Authorization': 'Bearer ' + token_result }
+                payload = {
+                            "schemas": [
+                            "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                            ],
+                            "Operations": [
+                            {
+                            "op": "replace",
+                            "value": {
+                            "active": False
+                            }
+                            }
+                            ]
+                            }
+                req = requests.patch(url=url, headers=headers, json = payload)
+                if req.status_code == 200:
+                    break
+                else:
+                    self.logger_obj.error(f"Failed to deactivate SPN with dbx_id:{id}") 
+                    self.logger_obj.error(f"Deactivating SPN Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        self.logger_obj.error(f"Deactivating SPN Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                        break
+    @log_decorator.log_decorator()
+    def activate_users_dbx(self,users_to_activate):
+        for idx, row in users_to_activate.iterrows():
+            id = row['id_y']
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"
+            token_result = self.token_dbx
+            retry_counter =0
+            while True:
+                headers = {'Authorization': 'Bearer ' + token_result }
+                payload = {
+                        "schemas": [
+                        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                        ],
+                        "Operations": [
+                        {
+                        "op": "replace",
+                        "value": {
+                        "active": True
+                        }
+                        }
+                        ]
+                        }
+                req = requests.patch(url=url, headers=headers, json = payload)
+                if req.status_code == 200:
+                    break
+                else:
+                    self.logger_obj.error(f"Failed to activate user with dbx_id:{id}") 
+                    self.logger_obj.error(f"Activating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        break
+    @log_decorator.log_decorator()
+    def activate_spns_dbx(self,spns_to_activate):
+        for idx, row in spns_to_activate.iterrows():
+            id = row['id_y']
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals/{id}"
+            token_result = self.token_dbx
+            retry_counter = 0
+            while True:
+                headers = {'Authorization': 'Bearer ' + token_result }
+                payload = {
+                        "schemas": [
+                        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                        ],
+                        "Operations": [
+                        {
+                        "op": "replace",
+                        "value": {
+                        "active": True
+                        }
+                        }
+                        ]
+                        }
+                req = requests.patch(url=url, headers=headers, json = payload)
+                if req.status_code == 200:
+                    break
+                else:
+                    self.logger_obj.error(f"Failed to activate SPN with dbx_id:{id}") 
+                    self.logger_obj.error(f"Activating SPN Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        self.logger_obj.error(f"Activating SPN Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed : Continuing")
+                        break
+    def sync_groups(self):
+
+        groups_df_dbx = self.get_all_groups_dbx()
+        groups_df_aad = self.get_all_groups_aad(False)
+
+        # Find the differences
+        if 'externalId' in groups_df_dbx:
+            net_delta = groups_df_aad.merge(groups_df_dbx, left_on=['displayName','id'], right_on=['displayName','externalId'], how='outer')
+            groups_to_add = net_delta[net_delta['id_y'].isna()]
+            groups_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['externalId'].notna())] 
+        else:
+            net_delta = groups_df_aad.merge(groups_df_dbx, left_on=['displayName'], right_on=['displayName'], how='outer')
+            groups_to_add = net_delta[net_delta['id_y'].isna()]
+
+        # add missing groups into dbx
+        created_df = pd.DataFrame()
+        for idx, row in groups_to_add.iterrows():
+            group_displayName = row['displayName']
+            group_externalId = row['id_x']
+            df = self.create_group_dbx(group_displayName,group_externalId)
+            created_df = pd.concat([created_df,df])
+        
+        # Whats the grounds for removing a group
+        # remove unmanaged groups from dbx
+        ret_res = []
+        # for idx, row in groups_to_remove.iterrows():
+        #     id = row['id_y']
+        #     ret_res.append(delete_group_dbx(id))
+
+        return created_df,ret_res
+    def sync_users(self):
+        users_df_dbx = self.get_all_user_groups_dbx()
+        spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
+        users_df_dbx = users_df_dbx[users_df_dbx['applicationId'].isna()]
+        # lower case for join
+        users_df_dbx['userName'] = users_df_dbx['userName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+        # users_df_dbx.display()
+
+        # get all users that belong in atleast one group
+        users_df_aad_all = self.get_all_groups_aad(True)
+        users_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.user']
+        # keep only unique records
+        users_df_aad = users_df_aad[['id', 'displayName',  'userPrincipalName']]
+        users_df_aad = users_df_aad.drop_duplicates()
+        # lower case for join
+        users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        # users_df_aad.display()
+
+        net_delta = users_df_aad.merge(users_df_dbx, left_on=['userPrincipalName'], right_on=['userName'], how='outer')
+
+        users_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna()) ]
+        users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
+        users_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].notna()) & (net_delta['active'] == False)]
+
+        self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
+        created_users = self.create_users_dbx(users_to_add)
+        self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}") 
+        self.deactivate_users_dbx(users_to_remove)
+        self.logger_obj.info(f"Activating Users{len(users_to_activate)}") 
+        self.activate_users_dbx(users_to_activate)
+
+
+        spn_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.servicePrincipal']
+        # keep only unique records
+        spn_df_aad = spn_df_aad[['id', 'displayName','appId']]
+        spn_df_aad = spn_df_aad.drop_duplicates()
+
+        net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['appId'], right_on=['applicationId'], how='outer')
+
+        spns_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
+        spns_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['applicationId'].notna())& (net_delta['active'] == True)] 
+        spns_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['applicationId'].notna()) & (net_delta['active'] == False)]
+
+        # self.logger_obj.info(f"Creating New SPNs{len(spns_to_add)}") 
+        created_spns = self.create_spns_dbx(spns_to_add)
+        # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
+
+        self.deactivate_spns_dbx(spns_to_remove)
+
+        # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
+        self.activate_spns_dbx(spns_to_activate)
+
+        created_users = created_users.extend(created_spns)
+
+        return created_users
+    @log_decorator.log_decorator()
+    def remove_dbx_group_mappings(self,mappings_to_remove):
+        operation_set = {}
+        unique_groups = mappings_to_remove['group_id_y'].drop_duplicates()
+        for g_idx,group_id in unique_groups.items():
+            members = []
+            for idx,row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
+                user_id = row['id_y']
+                members.append( {"op": "remove",'path': f"members.value[value eq {user_id}]"})
+                operation_set[group_id] = members
+
+        # print(operation_set)
+        for item in operation_set: 
+            retry_counter = 0
+            while True:
+
+                payload = {
+                        "schemas": [
+                        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                        ],
+                        "Operations": operation_set[item]
+                        }
+                account_id = self.dbx_config["account_id"] 
+                url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{item}"
+
+                token_result = self.token_dbx
+                headers = {'Authorization': 'Bearer ' + token_result }
+
+                req = requests.patch(url=url, headers=headers, json = payload)
+                if req.status_code == 200:
+                    self.logger_obj.info(f"User mapping removed for items:{item}") 
+                    break
+                else:
+                    self.logger_obj.error(f"Group mapping removal failed for items:{item}") 
+                    self.logger_obj.error(f"Group mapping removal failed for items : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        break
+    @log_decorator.log_decorator()
+    def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
+        mapping_set = {}
+        unique_groups = mappings_to_add['group_id_x'].drop_duplicates()
+        for g_idx,group_id in unique_groups.items():
+            members = []
+
+            for idx,row in mappings_to_add[mappings_to_add['group_id_x']==group_id].iterrows():
+
+                if len(group_master_df[group_master_df['externalId']==row['group_id_x']]) >0 :
+                    group_id = str(group_master_df[group_master_df['externalId']==row['group_id_x']].iloc[0]['id'])
+                    mapping_set[group_id] = members
+                # if len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']]) >0 :
+                if row['@odata.type']=='#microsoft.graph.user':
+                    if (len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']])>0):
+                        user_id = str(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']].iloc[0]['id'])
+                        members.append( {'value':user_id})
+                elif row['@odata.type']=='#microsoft.graph.servicePrincipal':
+                    if (len(users_df_dbx[users_df_dbx['applicationId']==row['appId']])>0):
+                        user_id = str(users_df_dbx[users_df_dbx['applicationId']==row['appId']].iloc[0]['id'])
+                        members.append( {'value':user_id})
+                elif row['@odata.type']=='#microsoft.graph.group':
+                    if (len(group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id'])>0):
+                        user_id = group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id']
+                        members.append( {'value':user_id})
+                
+                
+            
+        for item in mapping_set:
+            # print(item)
+            # print(mapping_set[item])
+            retry_counter = 0
+            while True:
+
+                payload = {
+                        "schemas": [
+                        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                        ],
+                        "Operations": [
+                        {
+                        "op": "add",
+                        "value": {
+                        "members": mapping_set[item]
+                        }
+                        }
+                        ]
+                        }
+
+
+                account_id = self.dbx_config["account_id"] 
+                url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{item}"
+                token_result = self.token_dbx
+
+                headers = {'Authorization': 'Bearer ' + token_result }
+                
+                req = requests.patch(url=url, headers=headers, json = payload)
+                if req.status_code == 200:
+                    self.logger_obj.info(f"User mapping created for items:{item}") 
+                    break
+                else:
+                    self.logger_obj.error(f"Group mapping creation failed for items:{item}") 
+                    self.logger_obj.error(f"Group mapping creation failed for items : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        break  
+
+
+    def sync_mappings(self):
+        users_df_dbx = self.get_all_user_groups_dbx()
+        # lower case for join
+        users_df_dbx['userName'] = users_df_dbx['userName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+        # users_df_dbx.display()
+
+        # get all users that belong in atleast one group
+        users_df_aad = self.get_all_groups_aad(True)
+        # lower case for join
+        users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        
+        net_delta = users_df_aad.merge(users_df_dbx, left_on=['group_id','userPrincipalName'], right_on=['group_externalId','userName'], how='outer')
+        mappings_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
+        
+        group_master_df = self.get_all_groups_dbx()
+
+        mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_externalId'].notna())]
+        mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
+
+        self.remove_dbx_group_mappings(mappings_to_remove)
+        
+        self.add_dbx_group_mappings(mappings_to_add,group_master_df,users_df_dbx)
+    
+    def delete_users_dbx(self,users_to_delete):
+        ret_df = pd.DataFrame()
+        threads= []
+        results = []
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for idx, row in users_to_delete.iterrows():
+                id = row['id']
+                account_id = self.dbx_config["account_id"]
+                threads.append(executor.submit(self.delete_user, self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"))
+                
+            for task in as_completed(threads):
+                results.append(task.result())
+
+        return results
+    
+    @sleep_and_retry
+    @limits(calls=7, period=1)      
+    def delete_user(self,url):
+        token_result = self.token_dbx
+        headers = {'Authorization': 'Bearer ' + token_result }
+        retry_counter = 0
+        while True:
+            req = requests.delete(url=url, headers=headers)
+            if req.status_code == 204:
+                break
+            else:
+                if retry_counter <=3 :
+                    print('Retrying Delete')
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    break
+        return req.content
+    @sleep_and_retry
+    @limits(calls=7, period=1)  
+    def delete_groups_dbx(self,groups_to_delete):
+        ret_df = pd.DataFrame()
+        for idx, row in groups_to_delete.iterrows():
+            id = row['id']
+
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+            req = requests.delete(url=url, headers=headers)
+            # print(req.content)
+            try:
+                assert req.status_code == 204
+                # print(id)
+            except AssertionError:
+                if req.status_code == 409:
+                    print('User Already exists. Trying to activate user')
+                else:
+                    ('Failed Creating User')
+    
+    def set_test_base(self):
+        users_df_dbx = self.get_all_user_groups_dbx()
+        if users_df_dbx is not None:
+            users_df_dbx = users_df_dbx[users_df_dbx['id']!='8935314208503406']
+            self.delete_users_dbx(users_df_dbx)
+        groups_df_dbx = self.get_all_groups_dbx()
+        if groups_df_dbx is not None:
+            self.delete_groups_dbx(groups_df_dbx)
