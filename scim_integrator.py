@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache 
 import time
 from ratelimit import limits, RateLimitException, sleep_and_retry
+import logging
 
 class scim_integrator():
     def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir ):
@@ -19,7 +20,7 @@ class scim_integrator():
         self.token_dbx = ''
         self.log_file_name = log_file_name
         self.log_file_dir = log_file_dir
-        self.logger_obj = log.get_logger(log_file_name=self.log_file_name, log_dir=self.log_file_dir)
+        self.logger_obj = log.get_logger(log_file_name=self.log_file_name, log_dir=self.log_file_dir, loggingLevel= logging.INFO)
         self.MAX_GET_CALLS_PER_SEC = 20
         self.MAX_PATCH_CALLS_PER_SEC = 2
         self.MAX_POST_CALLS_PER_SEC = 5

@@ -18,7 +18,7 @@ class CustomFormatter(logging.Formatter):
         return super(CustomFormatter, self).format(record)
 
 
-def get_logger(log_file_name, log_dir=""):
+def get_logger(log_file_name, log_dir="", loggingLevel):
     """ Creates a Log File and returns Logger object """
 
     # windows_log_dir = 'c:\\logs_dir\\'
@@ -37,7 +37,7 @@ def get_logger(log_file_name, log_dir=""):
 
     # Create logger object and set the format for logging and other attributes
     logger = logging.Logger(log_file_name)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(loggingLevel)
     handler = logging.FileHandler(logPath, 'a+')
     """ Set the formatter of 'CustomFormatter' type as we need to log base function name and base file name """
     handler.setFormatter(CustomFormatter('%(asctime)s - %(levelname)-10s - %(filename)s - %(funcName)s - %(message)s'))
