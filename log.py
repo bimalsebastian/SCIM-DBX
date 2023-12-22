@@ -18,7 +18,7 @@ class CustomFormatter(logging.Formatter):
         return super(CustomFormatter, self).format(record)
 
 
-def get_logger(log_file_name, log_dir="", loggingLevel):
+def get_logger(log_file_name, log_dir="", loggingLevel = logging.INFO):
     """ Creates a Log File and returns Logger object """
 
     # windows_log_dir = 'c:\\logs_dir\\'
