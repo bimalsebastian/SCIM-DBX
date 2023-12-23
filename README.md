@@ -1,5 +1,5 @@
 
-# This is a python based utlity to integrate Users, SPNs and Groups from Azure AAD to Databricks Accounts Console.
+# This is a python based utility to integrate Users, SPNs and Groups from Azure AAD to Databricks Accounts Console.
 ## The code works on the following logic
 
 ### Pre Requisites:
@@ -10,9 +10,9 @@
 ### Core Logic:
 * Takes the input from the list groups_to_sync: Feed in all the AD groups you need to sync into databricks account console
 * The utility then reads all the users, SPNs and groups listed as children within these groups from Azure AD  / Entra ID using the Service Principal credential. Using the dictionary : "config" to configure this
-* Once the data is read, it synchornizes all users into Databricks starting with creating any new users and deactivating any invalid users. This synchornisation also includes SPNs
+* Once the data is read, it synchronises all users into Databricks starting with creating any new users and deactivating any invalid users. This synchronisation also includes SPNs
 * It then moves on to create all the groups including the nested groups.
-* Once the base set is created, it moves on to synchronising the relations beween Users, SPNs and other child groups into respective groups.
+* Once the base set is created, it moves on to synchronising the relations between Users, SPNs and other child groups into respective groups.
 
 scim_runner is the main entry into the implementation logic. It shows how the base class scim_integrator is created and the underlying functions for synchronisation is called
 
@@ -40,7 +40,7 @@ groups_to_sync = ['Nested Group 1','Nested Group 2','Nested Group 3','DummyGroup
 
 ### Other considerations,
 1. Databricks Account SCIM APIs are throttled as referenced here : https://learn.microsoft.com/en-us/azure/databricks/resources/limits
-2. The code user multi threading to spead up the sync, but this is throtled.
+2. The code user multi threading to speed up the sync, but this is throttled.
 3. Retry logic is built into the code, but there are chances for missing syncs. These can be evaluated from the log files. Please adjust the Log Level in code and the Log path while initialising the code.
    
 
