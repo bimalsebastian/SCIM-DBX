@@ -975,6 +975,22 @@ class scim_integrator():
         self.remove_dbx_group_mappings(mappings_to_remove)
         
         self.add_dbx_group_mappings(mappings_to_add,group_master_df,users_df_dbx)
+
+
+
+
+        net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id','appId'], right_on=['group_externalId','applicationId'], how='outer')
+        net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] =='#microsoft.graph.servicePrincipal']
+        mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
+        
+        mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
+        mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()
+
+        self.remove_dbx_group_mappings(mappings_to_remove_spns)
+        
+        self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
+
+
     
     def delete_users_dbx(self,users_to_delete):
         ret_df = pd.DataFrame()
