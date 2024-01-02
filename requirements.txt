@@ -1,0 +1,5 @@
+msal==1.26.0
+numpy==1.26.2
+pandas==2.1.4
+ratelimit==2.2.1
+Requests==2.31.0

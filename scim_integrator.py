@@ -618,31 +618,32 @@ class scim_integrator():
         # return ret_df
     @log_decorator.log_decorator()    
     def deactivate_users_dbx(self,users_to_remove):
+        token_result = self.token_dbx
+        headers = {'Authorization': 'Bearer ' + token_result }
+        payload = {
+                    "schemas": [
+                    "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                    ],
+                    "Operations": [
+                    {
+                    "op": "replace",
+                    "value": {
+                    "active": False
+                    }
+                    }
+                    ]
+                    }
+    
         for idx, row in users_to_remove.iterrows():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"
-            token_result = self.token_dbx
             retry_counter =0
             while True:
-                
                 try:
-                    headers = {'Authorization': 'Bearer ' + token_result }
-                    payload = {
-                                "schemas": [
-                                "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-                                ],
-                                "Operations": [
-                                {
-                                "op": "replace",
-                                "value": {
-                                "active": False
-                                }
-                                }
-                                ]
-                                }
                     req = requests.patch(url=url, headers=headers, json = payload)
                     assert req.status_code == 200
+                    break
                 except:
                     
                     self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id}") 
