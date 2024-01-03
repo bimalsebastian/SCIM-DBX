@@ -90,7 +90,11 @@ class scim_integrator():
     def get_all_groups_aad(self,with_members = False):
         batch_size = 10
         split_count = round(len(self.groups_to_sync)/batch_size,0)
-        groups_to_sync_split = np.array_split(self.groups_to_sync, split_count) 
+        groups_to_sync_split = []
+        if split_count > 0 :
+            groups_to_sync_split = np.array_split(self.groups_to_sync, split_count)
+        else:
+            groups_to_sync_split = np.array_split(self.groups_to_sync, 1)
         filter_params = []
         user_groups_df = pd.DataFrame()
 
@@ -969,7 +973,12 @@ class scim_integrator():
         users_df_aad = self.get_all_groups_aad(True)
         # lower case for join
         users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
-        
+        users_df_aad = users_df_aad.reset_index(drop = True)
+        # If child groups are present, then the join would fail since userPrincipalNames are Nan. For groups, force the join through displayName
+        for idx,row in users_df_aad.iterrows():
+            if row['@odata.type'] == '#microsoft.graph.group':
+                users_df_aad.iloc[idx]['userPrincipalName'] = row['displayName']
+
         net_delta = users_df_aad.merge(users_df_dbx, left_on=['group_id','userPrincipalName'], right_on=['group_externalId','userName'], how='outer')
         mappings_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
         

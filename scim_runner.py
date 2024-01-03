@@ -7,7 +7,7 @@ import yaml
 
 
 
-# config_path = "../Alternate Configs/config bimal.yml"
+# config_path = "../Alternate Configs/config bruno.yml"
 config_path = "config.yml"
 
 if __name__ == '__main__':
