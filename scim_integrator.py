@@ -12,12 +12,12 @@ from ratelimit import limits, RateLimitException, sleep_and_retry
 import logging
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
         self.token = ''
-        self.token_dbx = ''
+        self.token_dbx = token_dbx
         self.log_file_name = log_file_name
         self.log_file_dir = log_file_dir
         self.logger_obj = log.get_logger(log_file_name=self.log_file_name, log_dir=self.log_file_dir, loggingLevel= logging.INFO)
@@ -162,8 +162,11 @@ class scim_integrator():
             counter = 0
             for resource in req.json()['Resources']:
 
-                df.loc[counter,'displayName'] = resource['displayName']
-                df.loc[counter,'active'] = resource['active']
+                if 'displayName' in resource:
+                    df.loc[counter,'displayName'] = resource['displayName']
+
+                if 'active' in resource:
+                    df.loc[counter,'active'] = resource['active']
                 df.loc[counter,'id'] = resource['id']
                 df.loc[counter,'userName'] = resource['userName']
                 df.loc[counter,'applicationId'] = np.nan
@@ -193,8 +196,10 @@ class scim_integrator():
             counter = 0
             for resource in req.json()['Resources']:
 
-                df.loc[counter,'displayName'] = resource['displayName']
-                df.loc[counter,'active'] = resource['active']
+                if 'displayName' in resource:
+                    df.loc[counter,'displayName'] = resource['displayName']
+                if 'active' in resource:
+                    df.loc[counter,'active'] = resource['active']
                 df.loc[counter,'id'] = resource['id']
                 df.loc[counter,'userName'] = np.nan
                 df.loc[counter,'applicationId'] = resource['applicationId']
@@ -222,7 +227,7 @@ class scim_integrator():
                 graph_results = []
                 index = 0
                 totalResults = 100
-                itemsPerPage = 10
+                itemsPerPage = 100
                 while index < totalResults: 
                     params = {'startIndex': str(index), 'count': itemsPerPage}
                     retry_counter = 0
@@ -310,7 +315,7 @@ class scim_integrator():
             self.logger_obj.error(f"Exception {X}")
     def get_users_with_ids_dbx(self,ids):
         try:
-            batch_size = 9
+            batch_size = 100
             account_id = self.dbx_config["account_id"]
             ids = np.unique(ids)
             size = round(len(ids)/batch_size,0)
@@ -336,7 +341,7 @@ class scim_integrator():
 
     def get_spns_with_ids_dbx(self,ids):
         try:
-            batch_size = 9
+            batch_size = 100
             account_id = self.dbx_config["account_id"]
             ids = np.unique(ids)
             size = round(len(ids)/batch_size,0)
@@ -816,7 +821,7 @@ class scim_integrator():
         self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
         created_users = self.create_users_dbx(users_to_add)
         self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}") 
-        self.deactivate_users_dbx(users_to_remove)
+        # self.deactivate_users_dbx(users_to_remove)
         self.logger_obj.info(f"Activating Users{len(users_to_activate)}") 
         self.activate_users_dbx(users_to_activate)
 

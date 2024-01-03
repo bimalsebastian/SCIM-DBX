@@ -1,6 +1,7 @@
 from scim_integrator import scim_integrator
 import time 
-
+import requests, json
+import pandas as pd
 LOG_FILE_LOCATION = '/Users/bimal.sebastian/SourceCode/tmp/'
 LOG_FILE_NAME = 'log'
 
@@ -16,7 +17,7 @@ config = {
 dbx_config = {
     'dbx_host' : "<Databricks Workspace URL>",
     'dbx_account_host' : 'https://accounts.azuredatabricks.net',
-    'account_id' : '<Databricks AccountID>',
+    'account_id' : '<Databricks Account ID>',
     'azure_tenant_id' : '<Azure Tenant ID>',
     'client_id' : 'Client ID for azure SPN',
     'client_secret' : 'Client Secret for azure SPN'
@@ -27,7 +28,11 @@ groups_to_sync = ['Nested Group 1','Nested Group 2','Nested Group 3','Nested Gro
 
 
 if __name__ == '__main__':
-    scim_runner = scim_integrator(config,dbx_config,groups_to_sync,LOG_FILE_NAME,LOG_FILE_LOCATION)
+    
+  
+
+    scim_runner = scim_integrator(config,dbx_config,groups_to_sync,LOG_FILE_NAME,LOG_FILE_LOCATION, token_result)
+
     scim_runner.auth_aad(True)
     scim_runner.auth_aad(False)
 
