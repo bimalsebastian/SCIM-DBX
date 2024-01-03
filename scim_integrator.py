@@ -841,7 +841,7 @@ class scim_integrator():
         created_spns = self.create_spns_dbx(spns_to_add)
         # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
 
-        self.deactivate_spns_dbx(spns_to_remove)
+        # self.deactivate_spns_dbx(spns_to_remove)
 
         # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
         self.activate_spns_dbx(spns_to_activate)
