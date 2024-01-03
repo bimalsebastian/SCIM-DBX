@@ -17,7 +17,7 @@ config = {
 dbx_config = {
     'dbx_host' : "<Databricks Workspace URL>",
     'dbx_account_host' : 'https://accounts.azuredatabricks.net',
-    'account_id' : '<Databricks Account ID>',
+    'account_id' : '<Databricks AccountID>',
     'azure_tenant_id' : '<Azure Tenant ID>',
     'client_id' : 'Client ID for azure SPN',
     'client_secret' : 'Client Secret for azure SPN'

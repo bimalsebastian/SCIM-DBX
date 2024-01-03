@@ -12,7 +12,7 @@ from ratelimit import limits, RateLimitException, sleep_and_retry
 import logging
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '' ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
@@ -976,6 +976,8 @@ class scim_integrator():
         group_master_df = self.get_all_groups_dbx()
 
         mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_externalId'].notna())]
+        # manage only removals for groups in sync list
+        mappings_to_remove = mappings_to_remove[mappings_to_remove['group_displayName'].isin(self.groups_to_sync)]
         mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
 
         self.remove_dbx_group_mappings(mappings_to_remove)
@@ -990,6 +992,7 @@ class scim_integrator():
         mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
         
         mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
+        mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
         mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()
 
         self.remove_dbx_group_mappings(mappings_to_remove_spns)
