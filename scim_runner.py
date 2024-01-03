@@ -31,7 +31,7 @@ if __name__ == '__main__':
     
   
 
-    scim_runner = scim_integrator(config,dbx_config,groups_to_sync,LOG_FILE_NAME,LOG_FILE_LOCATION, token_result)
+    scim_runner = scim_integrator(config,dbx_config,groups_to_sync,LOG_FILE_NAME,LOG_FILE_LOCATION)
 
     scim_runner.auth_aad(True)
     scim_runner.auth_aad(False)
