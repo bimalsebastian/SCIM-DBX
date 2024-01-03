@@ -1,5 +1,7 @@
 msal==1.26.0
-numpy==1.26.2
+numpy==1.26.3
 pandas==2.1.4
+PyYAML==6.0.1
+PyYAML==6.0.1
 ratelimit==2.2.1
 Requests==2.31.0

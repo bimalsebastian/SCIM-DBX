@@ -7,7 +7,8 @@ import yaml
 
 
 
-config_path = "../Alternate Configs/config bruno.yml"
+# config_path = "../Alternate Configs/config bimal.yml"
+config_path = "config.yml"
 
 if __name__ == '__main__':
     config = ''
@@ -24,15 +25,15 @@ if __name__ == '__main__':
     end = time.time() 
     print("Time taken to execute the sync users is", end-begin) 
 
-    # begin = time.time() 
-    # scim_runner.sync_groups()
-    # end = time.time() 
-    # print("Time taken to execute the sync groups is", end-begin) 
+    begin = time.time() 
+    scim_runner.sync_groups()
+    end = time.time() 
+    print("Time taken to execute the sync groups is", end-begin) 
 
-    # begin = time.time() 
-    # scim_runner.sync_mappings()
-    # end = time.time() 
-    # print("Time taken to execute the sync mappings is", end-begin) 
+    begin = time.time() 
+    scim_runner.sync_mappings()
+    end = time.time() 
+    print("Time taken to execute the sync mappings is", end-begin) 
 
 
 
