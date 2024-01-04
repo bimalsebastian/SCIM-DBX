@@ -16,6 +16,9 @@ dbx_config:
 LOG_FILE_LOCATION: '/Users/bimal.sebastian/SourceCode/tmp/'
 LOG_FILE_NAME : log
 
-groups_to_sync : ['Nested Group 1','Nested Group 2','Nested Group 3','Nested Group 4','Nested Level 2','Nested Level 2_2','DummyGroup0','DummyGroup100']
+groups_to_sync_path : 'groups_to_sync.json'
 
 is_dryrun: True
+
+
+deactivate_deleted_users : True

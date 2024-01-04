@@ -32,11 +32,12 @@ class scim_integrator():
     # global token 
     # global token_dbx     
    
-    def make_graph_get_call(self,url, pagination=True, params = {},key = ''):
+    def make_graph_get_call(self,url, pagination=True, params = {},key = '', headers_in = {}):
 
         token = self.token
 
-        headers = {'Authorization': 'Bearer ' + token}
+        headers =  {'Authorization': 'Bearer ' + token}
+        headers = {**headers, **headers_in}
         graph_results = []
         while url:
             try:
@@ -152,6 +153,19 @@ class scim_integrator():
         
         
         return users_df
+    def get_delete_users_aad(self):
+        url = "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$count=true&$orderby=deletedDateTime asc&$select=id,DisplayName,userPrincipalName,deletedDateTime"
+        headers = {'ConsistencyLevel': 'eventual'}
+        deleted_users = self.make_graph_get_call(url, pagination=True, headers_in = headers)
+        deleted_users_json = json.dumps(deleted_users)
+        deleted_users_json = str.encode(deleted_users_json)
+        deleted_users_df = pd.read_json(BytesIO(deleted_users_json),dtype='unicode',convert_dates=False)
+        # cleanup userPrincipal Name since deleted users are appened with id in UPN
+        if len(deleted_users_df) > 0:
+            for idx, row in deleted_users_df.iterrows():
+                deleted_users_df.iloc[idx]['userPrincipalName'] = row['userPrincipalName'].replace(row['id'].replace('-',''),'')
+        return deleted_users_df
+
 
     def get_user_details_dbx(self,ids_string):
         try:
@@ -170,14 +184,17 @@ class scim_integrator():
                    'id': pd.Series(dtype='str'),
                    'userName': pd.Series(dtype='str'),
                    'applicationId': pd.Series(dtype='str'),
-                   'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
+                   'externalId': pd.Series(dtype='str'),
+                   'isAdmin': np.full(1, False, dtype=bool),
+                   }, index = range(len(req.json()['Resources'])))
 
             counter = 0
             for resource in req.json()['Resources']:
 
                 if 'displayName' in resource:
                     df.loc[counter,'displayName'] = resource['displayName']
-
+                if 'roles' in resource:
+                    df.loc[counter,'isAdmin'] = True if list(filter(lambda x: x['value']  == 'account_admin', resource['roles'])) else False
                 if 'active' in resource:
                     df.loc[counter,'active'] = resource['active']
                 df.loc[counter,'id'] = resource['id']
@@ -442,6 +459,60 @@ class scim_integrator():
         except Exception as e:
             self.logger_obj.error(f"Getting All Group Details Failed")
             raise
+    def get_all_admins_dbx(self):
+        account_id = self.dbx_config["account_id"]
+            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
+        url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+        
+        token_result = self.token_dbx
+
+
+
+        headers = {'Authorization': 'Bearer ' + token_result }
+
+
+        graph_results = []
+        index = 0
+        totalResults = 100
+        itemsPerPage = 100
+        
+        while index < totalResults:
+            retry_counter = 0
+            while True:
+
+                params = {'startIndex': index, 'count': itemsPerPage,'filter': 'roles.value co account_admin'}
+                req = requests.get(url=url, headers=headers, params=params)
+                if req.status_code == 200:
+                    totalResults = req.json()['totalResults']
+                    itemsPerPage = req.json()['itemsPerPage']
+                    index += int(itemsPerPage)
+                    graph_results.append(req.json()) 
+                    break
+                else:
+                    self.logger_obj.error(f"Fetching Admin Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        self.logger_obj.error(f"Fetching Admin Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                        break
+        df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str')},index=range(totalResults))
+            
+        counter = 0
+        for result in graph_results:
+            resource_item = result['Resources']
+            for resource in resource_item:
+                if 'account_admin' in resource & 'members' in resource:
+                    for member in resource['members']:
+                        df.loc[counter,"displayName"] = resource["displayName"]
+                        df.loc[counter,"userName"] = resource["userName"]
+                        df.loc[counter,"active"] = resource["active"]
+                        df.loc[counter,"id"] = resource["id"]
+                        counter+=1
+        return df
 
     def get_all_users_dbx(self):
         try:
@@ -458,7 +529,7 @@ class scim_integrator():
             graph_results = []
             index = 0
             totalResults = 100
-            itemsPerPage = 10
+            itemsPerPage = 100
             params = {'startIndex': index, 'count': itemsPerPage}
             while index < totalResults:
                 retry_counter = 0
@@ -469,8 +540,9 @@ class scim_integrator():
                     if req.status_code == 200:
                         totalResults = req.json()['totalResults']
                         itemsPerPage = req.json()['itemsPerPage']
-                        index = int(itemsPerPage)
+                        index += int(itemsPerPage)
                         graph_results.append(req.json()) 
+                        break
                     else:
                         self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
                         if retry_counter <= 3:
@@ -479,7 +551,12 @@ class scim_integrator():
                         else:
                             self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
                             break
-            df = pd.DataFrame(index=range(totalResults))
+
+            df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str')},index=range(totalResults))
+            
             counter = 0
             for result in graph_results:
                 resource_item = result['Resources']
@@ -678,7 +755,7 @@ class scim_integrator():
                     
                     self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id}") 
                     self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
+                    if (retry_counter <= 3) and (req.reason != 'Not Found'):
                         time.sleep(1)
                         retry_counter+=1
                     else:
@@ -853,8 +930,8 @@ class scim_integrator():
         if self.is_dryrun:
             print('This is a dry run')
         print(" Total New Users :" + str(users_to_add.shape[0]))
-        print(" Total users that could be deactivated :" + str(users_to_remove.shape[0]))
-        print(" Total users that need to be activated :" + str(users_to_activate.shape[0]))
+        print(" Total Users that could be deactivated :" + str(users_to_remove.shape[0]))
+        print(" Total Users that need to be activated :" + str(users_to_activate.shape[0]))
 
         if not self.is_dryrun:
             self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
@@ -1065,8 +1142,58 @@ class scim_integrator():
             
             self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
 
+    def deactivate_deleted_users(self):
 
-    
+        delete_users_df = self.get_delete_users_aad()
+        all_users_dbx_df = self.get_all_user_groups_dbx()
+
+        delete_users_df['userPrincipalName'] = delete_users_df['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
+        net_delta = net_delta[net_delta['active']== True]
+        print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
+        print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
+        if self.is_dryrun:
+            print('This is a dry run')
+        else:
+            if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
+                print('Removing Admin users from Deletion')
+                net_delta = net_delta[net_delta['isAdmin']==False]
+            self.deactivate_users_dbx(net_delta)
+   
+    def deactivate_orphan_users(self):
+        users_df_dbx = self.get_all_user_groups_dbx()
+        spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
+        users_df_dbx = users_df_dbx[users_df_dbx['applicationId'].isna()]
+        # lower case for join
+        users_df_dbx['userName'] = users_df_dbx['userName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+        # users_df_dbx.display()
+
+        # get all users that belong in atleast one group
+        users_df_aad_all = self.get_all_groups_aad(True)
+        users_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.user']
+        # keep only unique records
+        users_df_aad = users_df_aad[['id', 'displayName',  'userPrincipalName']]
+        users_df_aad = users_df_aad.drop_duplicates()
+        # lower case for join
+        users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        # users_df_aad.display()
+
+        net_delta = users_df_aad.merge(users_df_dbx, left_on=['userPrincipalName'], right_on=['userName'], how='outer')
+
+        users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
+        valid_users = users_to_remove.query('group_displayName not in @self.groups_to_sync & group_displayName != "account users"')['id_y'].unique()
+        users_to_remove = users_to_remove.query('id_y not in @valid_users') 
+        users_to_remove = users_to_remove.query('isAdmin != True') 
+        users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
+        if self.is_dryrun:
+            print('This is a dry run')
+        print(" Total Orphan Users :" + str(users_to_remove.shape[0]))
+
+        if not self.is_dryrun:
+            self.logger_obj.info(f"Deactivating Orphan Users : {len(users_to_remove)}") 
+            self.deactivate_users_dbx(users_to_remove)
+
     def delete_users_dbx(self,users_to_delete):
         ret_df = pd.DataFrame()
         threads= []
