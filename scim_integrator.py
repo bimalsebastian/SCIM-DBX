@@ -10,14 +10,17 @@ from functools import lru_cache
 import time
 from ratelimit import limits, RateLimitException, sleep_and_retry
 import logging
+from io import BytesIO
+
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '' ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', is_dryrun = True ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
         self.token = ''
         self.token_dbx = token_dbx
+        self.is_dryrun = is_dryrun
         self.log_file_name = log_file_name
         self.log_file_dir = log_file_dir
         self.logger_obj = log.get_logger(log_file_name=self.log_file_name, log_dir=self.log_file_dir, loggingLevel= logging.INFO)
@@ -81,7 +84,8 @@ class scim_integrator():
             url = f'https://graph.microsoft.com/v1.0/servicePrincipals/{spn["id"]}'
             res = self.make_graph_get_call(url, False)
             res_json = json.dumps(res)
-            df = pd.read_json(res_json,dtype='unicode',convert_dates=False)
+            res_json = str.encode(res_json)
+            df = pd.read_json(BytesIO(res_json),dtype='unicode',convert_dates=False)
             spns_df = pd.concat([spns_df,df])
         return spns_df
 
@@ -109,7 +113,8 @@ class scim_integrator():
                 threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
             for task in as_completed(threads):
                 groups_json = json.dumps(task.result())
-                groups_df = pd.read_json(groups_json,dtype='unicode',convert_dates=False)
+                groups_json = str.encode(groups_json)
+                groups_df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
                 master_list = pd.concat([master_list,groups_df])
 
         threads_sub= []
@@ -127,7 +132,8 @@ class scim_integrator():
                 for sub_task in as_completed(threads_sub):
                     result =sub_task.result()
                     user_list = json.dumps(result[1])
-                    df = pd.read_json(user_list,dtype='unicode',convert_dates=False)
+                    user_list = str.encode(user_list)
+                    df = pd.read_json(BytesIO(user_list),dtype='unicode',convert_dates=False)
                     df['group_id'] = result[0]
                     # print(result[0])
                     user_groups_df = pd.concat([user_groups_df,df])
@@ -141,10 +147,8 @@ class scim_integrator():
         url = 'https://graph.microsoft.com/v1.0/users'
         users = self.make_graph_get_call(url, pagination=True)
         users_json = json.dumps(users)
-
-        
-
-        users_df = pd.read_json(users_json,dtype='unicode',convert_dates=False)
+        users_json = str.encode(users_json)
+        users_df = pd.read_json(BytesIO(users_json),dtype='unicode',convert_dates=False)
         
         
         return users_df
@@ -160,9 +164,14 @@ class scim_integrator():
             params = {'filter': ids_string}
             req = requests.get(url=url, headers=headers, params = params)
             assert req.status_code == 200
-            df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+            # df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+            df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'applicationId': pd.Series(dtype='str'),
+                   'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
 
-        
             counter = 0
             for resource in req.json()['Resources']:
 
@@ -193,10 +202,15 @@ class scim_integrator():
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
             params = {'filter': ids_string}
             req = requests.get(url=url, headers=headers, params = params)
-            assert req.status_code == 200
-            df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+            assert req.status_code == 200 
 
-        
+            df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'applicationId': pd.Series(dtype='str'),
+                   'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
+            
             counter = 0
             for resource in req.json()['Resources']:
 
@@ -293,8 +307,14 @@ class scim_integrator():
                         spn_ids.append(id.replace('ServicePrincipals/',''))
                     elif 'Groups' in id:
                         group_ids.append(id.replace('Groups/',''))
+                 
+
+                group_list_df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'applicationId': pd.Series(dtype='str')},index =range(len(group_ids)))
                 
-                group_list_df = pd.DataFrame(index =range(len(group_ids)), columns=['displayName','active','id','userName','applicationId'])
                 counter =0
                 for group_id in group_ids:
                     group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
@@ -494,7 +514,8 @@ class scim_integrator():
                 req = requests.post(url=url, headers=headers, json = payload)
                 if req.status_code == 201:
                     groups_json = json.dumps(req.json())
-                    df = pd.read_json(groups_json,dtype='unicode',convert_dates=False)
+                    groups_json = str.encode(groups_json)
+                    df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
                     return df
                 else:
                     self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
@@ -772,31 +793,38 @@ class scim_integrator():
         groups_df_dbx = self.get_all_groups_dbx()
         groups_df_aad = self.get_all_groups_aad(False)
 
+        if self.is_dryrun:
+            print('This is a dry run')
         # Find the differences
         if 'externalId' in groups_df_dbx:
             net_delta = groups_df_aad.merge(groups_df_dbx, left_on=['displayName','id'], right_on=['displayName','externalId'], how='outer')
             groups_to_add = net_delta[net_delta['id_y'].isna()]
             groups_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['externalId'].notna())] 
+            print(" Total New Groups :" + str(groups_to_add.shape[0]))
+            print(" Total Groups that could be deleted :" + str(groups_to_remove.shape[0]))
         else:
             net_delta = groups_df_aad.merge(groups_df_dbx, left_on=['displayName'], right_on=['displayName'], how='outer')
             groups_to_add = net_delta[net_delta['id_y'].isna()]
+            print(" Total New Groups :" + str(groups_to_add.shape[0]))
 
-        # add missing groups into dbx
-        created_df = pd.DataFrame()
-        for idx, row in groups_to_add.iterrows():
-            group_displayName = row['displayName']
-            group_externalId = row['id_x']
-            df = self.create_group_dbx(group_displayName,group_externalId)
-            created_df = pd.concat([created_df,df])
         
-        # Whats the grounds for removing a group
-        # remove unmanaged groups from dbx
-        ret_res = []
-        # for idx, row in groups_to_remove.iterrows():
-        #     id = row['id_y']
-        #     ret_res.append(delete_group_dbx(id))
+        if self.is_dryrun:
+            # add missing groups into dbx
+            created_df = pd.DataFrame()
+            for idx, row in groups_to_add.iterrows():
+                group_displayName = row['displayName']
+                group_externalId = row['id_x']
+                df = self.create_group_dbx(group_displayName,group_externalId)
+                created_df = pd.concat([created_df,df])
+            
+            # Whats the grounds for removing a group
+            # remove unmanaged groups from dbx
+            ret_res = []
+            # for idx, row in groups_to_remove.iterrows():
+            #     id = row['id_y']
+            #     ret_res.append(delete_group_dbx(id))
 
-        return created_df,ret_res
+            return created_df,ret_res
     def sync_users(self):
         users_df_dbx = self.get_all_user_groups_dbx()
         spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
@@ -822,12 +850,19 @@ class scim_integrator():
         users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
         users_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].notna()) & (net_delta['active'] == False)]
 
-        self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
-        created_users = self.create_users_dbx(users_to_add)
-        self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}") 
-        # self.deactivate_users_dbx(users_to_remove)
-        self.logger_obj.info(f"Activating Users{len(users_to_activate)}") 
-        self.activate_users_dbx(users_to_activate)
+        if self.is_dryrun:
+            print('This is a dry run')
+        print(" Total New Users :" + str(users_to_add.shape[0]))
+        print(" Total users that could be deactivated :" + str(users_to_remove.shape[0]))
+        print(" Total users that need to be activated :" + str(users_to_activate.shape[0]))
+
+        if not self.is_dryrun:
+            self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
+            created_users = self.create_users_dbx(users_to_add)
+            self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}") 
+            # self.deactivate_users_dbx(users_to_remove)
+            self.logger_obj.info(f"Activating Users{len(users_to_activate)}") 
+            self.activate_users_dbx(users_to_activate)
 
 
         spn_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.servicePrincipal']
@@ -841,18 +876,26 @@ class scim_integrator():
         spns_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['applicationId'].notna())& (net_delta['active'] == True)] 
         spns_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['applicationId'].notna()) & (net_delta['active'] == False)]
 
-        # self.logger_obj.info(f"Creating New SPNs{len(spns_to_add)}") 
-        created_spns = self.create_spns_dbx(spns_to_add)
-        # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
+        if self.is_dryrun:
+            print('This is a dry run')
+        print(" Total New SPNs :" + str(spns_to_add.shape[0]))
+        print(" Total SPNs that could be deactivated :" + str(spns_to_remove.shape[0]))
+        print(" Total SPNs that need to be activated :" + str(spns_to_activate.shape[0]))
 
-        # self.deactivate_spns_dbx(spns_to_remove)
+        if not self.is_dryrun:
+            # self.logger_obj.info(f"Creating New SPNs{len(spns_to_add)}") 
+            created_spns = self.create_spns_dbx(spns_to_add)
+            # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
 
-        # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
-        self.activate_spns_dbx(spns_to_activate)
+            # self.deactivate_spns_dbx(spns_to_remove)
 
-        created_users = created_users.extend(created_spns)
+            # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
+            self.activate_spns_dbx(spns_to_activate)
 
-        return created_users
+        if not self.is_dryrun:
+            created_users = created_users.extend(created_spns)
+            return created_users
+        
     @log_decorator.log_decorator()
     def remove_dbx_group_mappings(self,mappings_to_remove):
         operation_set = {}
@@ -977,7 +1020,7 @@ class scim_integrator():
         # If child groups are present, then the join would fail since userPrincipalNames are Nan. For groups, force the join through displayName
         for idx,row in users_df_aad.iterrows():
             if row['@odata.type'] == '#microsoft.graph.group':
-                users_df_aad.iloc[idx]['userPrincipalName'] = row['displayName']
+                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['displayName']).lower()
 
         net_delta = users_df_aad.merge(users_df_dbx, left_on=['group_id','userPrincipalName'], right_on=['group_externalId','userName'], how='outer')
         mappings_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
@@ -987,11 +1030,19 @@ class scim_integrator():
         mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_externalId'].notna())]
         # manage only removals for groups in sync list
         mappings_to_remove = mappings_to_remove[mappings_to_remove['group_displayName'].isin(self.groups_to_sync)]
+        # Remove mappings that belong to SPNs since its handled separately
+        mappings_to_remove = mappings_to_remove[mappings_to_remove['applicationId'].isna()]
         mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
-
-        self.remove_dbx_group_mappings(mappings_to_remove)
+        if self.is_dryrun:
+            print('This is a dry run')
         
-        self.add_dbx_group_mappings(mappings_to_add,group_master_df,users_df_dbx)
+        print(" Total New Mappings for Users:" + str(mappings_to_add[mappings_to_add['@odata.type'] != '#microsoft.graph.servicePrincipal'].shape[0]))
+        print(" Total Mappings for Users to be removed :" + str(mappings_to_remove.shape[0])) 
+
+        if not self.is_dryrun:
+            self.remove_dbx_group_mappings(mappings_to_remove)
+            
+            self.add_dbx_group_mappings(mappings_to_add,group_master_df,users_df_dbx)
 
 
 
@@ -1003,10 +1054,16 @@ class scim_integrator():
         mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
         mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
         mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()
-
-        self.remove_dbx_group_mappings(mappings_to_remove_spns)
+        if self.is_dryrun:
+            print('This is a dry run')
         
-        self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
+        print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
+        print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
+
+        if not self.is_dryrun:
+            self.remove_dbx_group_mappings(mappings_to_remove_spns)
+            
+            self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
 
 
     

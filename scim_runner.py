@@ -7,7 +7,7 @@ import yaml
 
 
 
-# config_path = "../Alternate Configs/config bruno.yml"
+# config_path = "../Alternate Configs/config bimal.yml"
 config_path = "config.yml"
 
 if __name__ == '__main__':
@@ -15,7 +15,7 @@ if __name__ == '__main__':
     with open(config_path, 'r') as file:
       base_config = yaml.safe_load(file)
       
-    scim_runner = scim_integrator(base_config['config'],base_config['dbx_config'],base_config['groups_to_sync'] ,base_config['LOG_FILE_NAME'] ,base_config['LOG_FILE_LOCATION'])
+    scim_runner = scim_integrator(base_config['config'],base_config['dbx_config'],base_config['groups_to_sync'] ,base_config['LOG_FILE_NAME'] ,base_config['LOG_FILE_LOCATION'],is_dryrun =  base_config['is_dryrun'])
 
     scim_runner.auth_aad(True)
     scim_runner.auth_aad(False)
