@@ -44,11 +44,11 @@ if __name__ == '__main__':
     end = time.time() 
     print("Time taken to execute the sync mappings is", end-begin) 
 
-
-    begin = time.time() 
-    scim_runner.deactivate_orphan_users()
-    end = time.time() 
-    print("Time taken to execute the sync mappings is", end-begin) 
+    if base_config['deactivate_orphan_users']:
+      begin = time.time() 
+      scim_runner.deactivate_orphan_users()
+      end = time.time() 
+      print("Time taken to execute the sync mappings is", end-begin) 
 
 
 

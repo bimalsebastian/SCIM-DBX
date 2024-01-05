@@ -20,5 +20,6 @@ groups_to_sync_path : 'groups_to_sync.json'
 
 is_dryrun: True
 
-
 deactivate_deleted_users : True
+
+deactivate_orphan_users : True
