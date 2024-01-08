@@ -1160,20 +1160,21 @@ class scim_integrator():
     def deactivate_deleted_users(self):
 
         delete_users_df = self.get_delete_users_aad()
-        all_users_dbx_df = self.get_all_user_groups_dbx()
+        if (delete_users_df is not None) and (not delete_users_df.empty): 
+            all_users_dbx_df = self.get_all_user_groups_dbx()
 
-        delete_users_df['userPrincipalName'] = delete_users_df['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
-        net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
-        net_delta = net_delta[net_delta['active']== True]
-        print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
-        print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
-        if self.is_dryrun:
-            print('This is a dry run')
-        else:
-            if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
-                print('Removing Admin users from Deletion')
-                net_delta = net_delta[net_delta['isAdmin']==False]
-            self.deactivate_users_dbx(net_delta)
+            delete_users_df['userPrincipalName'] = delete_users_df['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+            net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
+            net_delta = net_delta[net_delta['active']== True]
+            print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
+            print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
+            if self.is_dryrun:
+                print('This is a dry run')
+            else:
+                if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
+                    print('Removing Admin users from Deletion')
+                    net_delta = net_delta[net_delta['isAdmin']==False]
+                self.deactivate_users_dbx(net_delta)
    
     def deactivate_orphan_users(self):
         users_df_dbx = self.get_all_user_groups_dbx()
