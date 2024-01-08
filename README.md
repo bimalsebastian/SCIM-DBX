@@ -10,7 +10,7 @@
 ### Core Logic:
 * Takes the input from the list groups_to_sync: Feed in all the AD groups you need to sync into databricks account console
 * The utility then reads all the users, SPNs and groups listed as children within these groups from Azure AD  / Entra ID using the Service Principal credential. Using the dictionary : "config" to configure this
-* Once the data is read, it synchronises all users into Databricks starting with creating any new users and deactivating any invalid users. This synchronisation also includes SPNs
+* Once the data is read, it synchronises all users into Databricks starting with creating any new users, groups, SPNs and updating their group membership (Nested group included). This synchronisation also includes SPNs
 * It then moves on to create all the groups including the nested groups.
 * Once the base set is created, it moves on to synchronising the relations between Users, SPNs and other child groups into respective groups.
 
