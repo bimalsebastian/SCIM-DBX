@@ -259,29 +259,39 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
 
             try:
-                graph_results = []
-                index = 0
-                totalResults = 100
-                itemsPerPage = 100
-                while index < totalResults: 
-                    params = {'startIndex': str(index), 'count': itemsPerPage}
-                    retry_counter = 0
-                    while True:
-                        req = requests.get(url=url, headers=headers, params=params)
-                        if req.status_code == 200:
-                            totalResults = req.json()['totalResults']
-                            itemsPerPage = req.json()['itemsPerPage']
-                            index += int(itemsPerPage)
-                            graph_results.append(req.json()) 
-                            break
-                        else:
-                            self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                            if retry_counter <= 3:
-                                time.sleep(1)
-                                retry_counter+=1
-                            else:
-                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                filter_batch_size = 100
+                if len(self.groups_to_sync) > filter_batch_size:
+                    group_ids_filter = np.array_split(self.groups_to_sync, filter_batch_size)
+                else:
+                    group_ids_filter = np.array_split(self.groups_to_sync, 1)
+                
+                for group_filter in group_ids_filter:
+                    filter_string = '` or displayName eq `'.join(group_filter)
+                    filter_string = 'displayName eq `' + filter_string + '`'
+
+                    graph_results = []
+                    index = 0
+                    totalResults = 100
+                    itemsPerPage = 100
+                    while index < totalResults: 
+                        params = {'startIndex': str(index), 'count': itemsPerPage, 'filter': filter_string}
+                        retry_counter = 0
+                        while True:
+                            req = requests.get(url=url, headers=headers, params=params)
+                            if req.status_code == 200:
+                                totalResults = req.json()['totalResults']
+                                itemsPerPage = req.json()['itemsPerPage']
+                                index += int(itemsPerPage)
+                                graph_results.append(req.json()) 
                                 break
+                            else:
+                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                                if retry_counter <= 3:
+                                    time.sleep(1)
+                                    retry_counter+=1
+                                else:
+                                    self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                                    break
                                 
                         
                     
