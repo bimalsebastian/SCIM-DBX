@@ -338,8 +338,11 @@ class scim_integrator():
                     counter+=1
         
 
+                group_list_df['type'] = 'Group'
                 user_list_df=self.get_users_with_ids_dbx(user_ids)
+                user_list_df['type'] = 'User'
                 spn_list_df=self.get_spns_with_ids_dbx(spn_ids)
+                spn_list_df['type'] = 'ServicePrincipal'
                 user_list_df = user_list_df[user_list_df['id'].notna()]
                 spn_list_df = spn_list_df[spn_list_df['id'].notna()]
 
@@ -878,7 +881,7 @@ class scim_integrator():
             groups_to_add = net_delta[net_delta['id_y'].isna()]
             groups_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['externalId'].notna())] 
             print(" Total New Groups :" + str(groups_to_add.shape[0]))
-            print(" Total Groups that could be deleted :" + str(groups_to_remove.shape[0]))
+            print(" Total Groups that could be deleted :" + str(groups_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
         else:
             net_delta = groups_df_aad.merge(groups_df_dbx, left_on=['displayName'], right_on=['displayName'], how='outer')
             groups_to_add = net_delta[net_delta['id_y'].isna()]
@@ -936,7 +939,7 @@ class scim_integrator():
         if not self.is_dryrun:
             self.logger_obj.info(f"Creating New Users{len(users_to_add)}") 
             created_users = self.create_users_dbx(users_to_add)
-            self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}") 
+            self.logger_obj.info(f"Deactivating Users{len(users_to_remove)}" + ": Info Only : Deactivation will not be done") 
             # self.deactivate_users_dbx(users_to_remove)
             self.logger_obj.info(f"Activating Users{len(users_to_activate)}") 
             self.activate_users_dbx(users_to_activate)
@@ -956,7 +959,7 @@ class scim_integrator():
         if self.is_dryrun:
             print('This is a dry run')
         print(" Total New SPNs :" + str(spns_to_add.shape[0]))
-        print(" Total SPNs that could be deactivated :" + str(spns_to_remove.shape[0]))
+        print(" Total SPNs that could be deactivated :" + str(spns_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
         print(" Total SPNs that need to be activated :" + str(spns_to_activate.shape[0]))
 
         if not self.is_dryrun:
@@ -1185,6 +1188,7 @@ class scim_integrator():
         valid_users = users_to_remove.query('group_displayName not in @self.groups_to_sync & group_displayName != "account users"')['id_y'].unique()
         users_to_remove = users_to_remove.query('id_y not in @valid_users') 
         users_to_remove = users_to_remove.query('isAdmin != True') 
+        users_to_remove = users_to_remove.query('type != "Group"') 
         users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
         if self.is_dryrun:
             print('This is a dry run')
