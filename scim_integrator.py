@@ -933,7 +933,7 @@ class scim_integrator():
         if self.is_dryrun:
             print('This is a dry run')
         print(" Total New Users :" + str(users_to_add.shape[0]))
-        print(" Total Users that could be deactivated :" + str(users_to_remove.shape[0]))
+        print(" Total Users that could be deactivated :" + str(users_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
         print(" Total Users that need to be activated :" + str(users_to_activate.shape[0]))
 
         if not self.is_dryrun:
