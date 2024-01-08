@@ -753,6 +753,7 @@ class scim_integrator():
                 try:
                     req = requests.patch(url=url, headers=headers, json = payload)
                     assert req.status_code == 200
+                    self.logger_obj.error(f"Deactivated User:{id}") 
                     break
                 except:
                     
@@ -789,6 +790,7 @@ class scim_integrator():
                             }
                 req = requests.patch(url=url, headers=headers, json = payload)
                 if req.status_code == 200:
+                    self.logger_obj.error(f"Deactivated SPN:{id}") 
                     break
                 else:
                     self.logger_obj.error(f"Failed to deactivate SPN with dbx_id:{id}") 
@@ -1006,7 +1008,7 @@ class scim_integrator():
 
                 req = requests.patch(url=url, headers=headers, json = payload)
                 if req.status_code == 200:
-                    self.logger_obj.info(f"User mapping removed for items:{item}") 
+                    self.logger_obj.info(f"Following Users : {operation_set[item]}  were removed from group:{item}") 
                     break
                 else:
                     self.logger_obj.error(f"Group mapping removal failed for items:{item}") 
