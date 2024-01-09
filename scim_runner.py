@@ -10,6 +10,8 @@ import yaml
 # config_path = "../Alternate Configs/config bimal.yml"
 config_path =  "config.yml"
 
+
+
 if __name__ == '__main__':
     config = ''
     with open(config_path, 'r') as file:
@@ -21,6 +23,7 @@ if __name__ == '__main__':
 
     scim_runner.auth_aad(True)
     scim_runner.auth_aad(False)
+    # scim_runner.get_workspaces_list()
 
     if base_config['deactivate_deleted_users']:
       begin = time.time() 

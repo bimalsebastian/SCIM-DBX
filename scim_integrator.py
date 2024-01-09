@@ -11,14 +11,14 @@ import time
 from ratelimit import limits, RateLimitException, sleep_and_retry
 import logging
 from io import BytesIO
-
+import math
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', is_dryrun = True ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
-        self.token = ''
+        self.token = token
         self.token_dbx = token_dbx
         self.is_dryrun = is_dryrun
         self.log_file_name = log_file_name
@@ -259,17 +259,17 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
 
             try:
-                filter_batch_size = 100
+                filter_batch_size = math.ceil(len(self.groups_to_sync)/ 30)
                 if len(self.groups_to_sync) > filter_batch_size:
                     group_ids_filter = np.array_split(self.groups_to_sync, filter_batch_size)
                 else:
                     group_ids_filter = np.array_split(self.groups_to_sync, 1)
-                
+                graph_results = []
                 for group_filter in group_ids_filter:
                     filter_string = '` or displayName eq `'.join(group_filter)
                     filter_string = 'displayName eq `' + filter_string + '`'
 
-                    graph_results = []
+                    
                     index = 0
                     totalResults = 100
                     itemsPerPage = 100
@@ -526,7 +526,35 @@ class scim_integrator():
                         df.loc[counter,"id"] = resource["id"]
                         counter+=1
         return df
-
+    
+    def get_workspaces_list(self):
+        account_id = self.dbx_config["account_id"]
+                    # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
+        url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/workspaces"  
+        token_result = self.token_dbx
+        headers = {'Authorization': 'Bearer ' + token_result }
+        req = requests.get(url=url, headers=headers)
+        if req.status_code == 200:
+            workspace_json = json.dumps(req.json())
+            workspace_json = str.encode(workspace_json)
+            df = pd.read_json(BytesIO(workspace_json),dtype='unicode',convert_dates=False)
+            df['permissions'] = ''
+            
+            for idx, workspace in df.iterrows():
+                url = f"https://{workspace['deployment_name']}.azuredatabricks.net/oidc/v1/token"
+                req = requests.post(url=url, auth=(self.dbx_config['client_id'],self.dbx_config['workspace_client_secret']), data={'grant_type':'client_credentials', 'scope':'all-apis'})
+                token_result = req.json()['access_token']
+                headers = {'Authorization': 'Bearer ' + token_result }    
+                url = f"https://{workspace['deployment_name']}.azuredatabricks.net/api/2.0/preview/scim/v2/Users"  
+                req = requests.get(url=url, headers=headers, params={'attributes':'entitlements'})
+                if req.status_code == 200:
+                    permission_json = req.json()['Resources']
+                    permission_json = json.dumps(permission_json)
+                    permission_json = str.encode(permission_json)
+                    perm_df = pd.read_json(BytesIO(permission_json),dtype='unicode',convert_dates=False)
+                
+        return df
+        
     def get_all_users_dbx(self):
         try:
             account_id = self.dbx_config["account_id"]
