@@ -1198,6 +1198,10 @@ class scim_integrator():
             print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
             if self.is_dryrun:
                 print('This is a dry run')
+                if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
+                    print('Exporting Deactivation list')
+                    net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
+
             else:
                 if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
                     print('Removing Admin users from Deletion')
@@ -1233,6 +1237,9 @@ class scim_integrator():
         users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
         if self.is_dryrun:
             print('This is a dry run')
+            if users_to_remove.shape[0] > 0:
+                print('Exporting Deactivation list')
+                users_to_remove.to_csv(self.log_file_dir + 'dbx_orphan_users_dump.csv')
         print(" Total Orphan Users :" + str(users_to_remove.shape[0]))
 
         if not self.is_dryrun:
