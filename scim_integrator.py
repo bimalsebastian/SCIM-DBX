@@ -1078,7 +1078,7 @@ class scim_integrator():
                         user_id = str(users_df_dbx[users_df_dbx['applicationId']==row['appId']].iloc[0]['id'])
                         members.append( {'value':user_id})
                 elif row['@odata.type']=='#microsoft.graph.group':
-                    if row["id_x"] in group_master_df["externalId"]:
+                    if row["id_x"] in list(group_master_df["externalId"]):
                         if (len(group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id'])>0):
                             user_id = group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id']
                             members.append( {'value':user_id})
