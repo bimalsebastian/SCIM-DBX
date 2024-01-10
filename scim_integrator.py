@@ -392,6 +392,92 @@ class scim_integrator():
         except Exception as e:
             self.logger_obj.error(f"Getting User Details with Ids Failed")
             raise
+    def get_user_details_with_userName_dbx(self,nameString):
+        try:
+            account_id = self.dbx_config["account_id"] 
+            token_result = self.token_dbx
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+            params = {'filter': 'userName eq `'+ nameString + '`'}
+            req = requests.get(url=url, headers=headers, params = params)
+            assert req.status_code == 200
+            # df = pd.DataFrame(index = range(len(req.json()['Resources'])))
+            df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool'),
+                   'id': pd.Series(dtype='str'),
+                   'userName': pd.Series(dtype='str'),
+                   'applicationId': pd.Series(dtype='str'),
+                   'externalId': pd.Series(dtype='str'),
+                   'isAdmin': np.full(1, False, dtype=bool),
+                   }, index = range(len(req.json()['Resources'])))
+
+            counter = 0
+            for resource in req.json()['Resources']:
+
+                if 'displayName' in resource:
+                    df.loc[counter,'displayName'] = resource['displayName']
+                if 'roles' in resource:
+                    df.loc[counter,'isAdmin'] = True if list(filter(lambda x: x['value']  == 'account_admin', resource['roles'])) else False
+                if 'active' in resource:
+                    df.loc[counter,'active'] = resource['active']
+                df.loc[counter,'id'] = resource['id']
+                df.loc[counter,'userName'] = resource['userName']
+                df.loc[counter,'applicationId'] = np.nan
+                if 'externalId' in resource:
+                    df.loc[counter,'externalId'] = resource['externalId']
+                counter+=1
+            return df
+        
+        except Exception as e:
+            self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+            raise
+    def get_spn_details_with_appDisplayName_dbx(self,appDislayName):
+        try:
+            account_id = self.dbx_config["account_id"] 
+            token_result = self.token_dbx
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
+            params = {'filter': 'displayName eq `'+ appDislayName + '`'}
+            req = requests.get(url=url, headers=headers, params = params)
+            assert req.status_code == 200 
+            if 'Resources' in req.json():
+                df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                    'active': pd.Series(dtype='bool'),
+                    'id': pd.Series(dtype='str'),
+                    'userName': pd.Series(dtype='str'),
+                    'applicationId': pd.Series(dtype='str'),
+                    'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
+                
+                counter = 0
+                if 'Resources' in regq.json():
+                    for resource in req.json()['Resources']:
+
+                        if 'displayName' in resource:
+                            df.loc[counter,'displayName'] = resource['displayName']
+                        if 'active' in resource:
+                            df.loc[counter,'active'] = resource['active']
+                        df.loc[counter,'id'] = resource['id']
+                        df.loc[counter,'userName'] = np.nan
+                        df.loc[counter,'applicationId'] = resource['applicationId']
+                        if 'externalId' in resource:
+                            df.loc[counter,'externalId'] = resource['externalId']
+                        counter+=1
+            else:
+                df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                    'active': pd.Series(dtype='bool'),
+                    'id': pd.Series(dtype='str'),
+                    'userName': pd.Series(dtype='str'),
+                    'applicationId': pd.Series(dtype='str'),
+                    'externalId': pd.Series(dtype='str')})
+
+            return df
+        except Exception as e:
+            self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+            raise
 
     def get_spns_with_ids_dbx(self,ids):
         try:
@@ -1073,10 +1159,20 @@ class scim_integrator():
                     if (len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']])>0):
                         user_id = str(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']].iloc[0]['id'])
                         members.append( {'value':user_id})
+                    else:
+                        df = self.get_user_details_with_userName_dbx(row['userPrincipalName'])
+                        if df.shape[0]>0:
+                            user_id = df.iloc[0]['id']
+                            members.append( {'value':user_id})
                 elif row['@odata.type']=='#microsoft.graph.servicePrincipal':
                     if (len(users_df_dbx[users_df_dbx['applicationId']==row['appId']])>0):
                         user_id = str(users_df_dbx[users_df_dbx['applicationId']==row['appId']].iloc[0]['id'])
                         members.append( {'value':user_id})
+                    else:
+                        df = self.get_spn_details_with_appDisplayName_dbx(row['appDisplayName'])
+                        if df.shape[0]>0:
+                            user_id = df.iloc[0]['id']
+                            members.append( {'value':user_id})
                 elif row['@odata.type']=='#microsoft.graph.group':
                     if row["id_x"] in list(group_master_df["externalId"]):
                         if (len(group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id'])>0):
