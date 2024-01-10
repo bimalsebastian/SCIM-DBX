@@ -928,7 +928,7 @@ class scim_integrator():
             print(" Total New Groups :" + str(groups_to_add.shape[0]))
 
         
-        if self.is_dryrun:
+        if not self.is_dryrun:
             # add missing groups into dbx
             created_df = pd.DataFrame()
             for idx, row in groups_to_add.iterrows():
@@ -1197,7 +1197,7 @@ class scim_integrator():
             print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
             print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
             if self.is_dryrun:
-                print('This is a dry run')
+                print('This is a dry run')  
                 if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
                     print('Exporting Deactivation list')
                     net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
@@ -1234,14 +1234,14 @@ class scim_integrator():
         users_to_remove = users_to_remove.query('id_y not in @valid_users') 
         users_to_remove = users_to_remove.query('isAdmin != True') 
         users_to_remove = users_to_remove.query('type != "Group"') 
-        users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
         if self.is_dryrun:
             print('This is a dry run')
             if users_to_remove.shape[0] > 0:
                 print('Exporting Deactivation list')
                 users_to_remove.to_csv(self.log_file_dir + 'dbx_orphan_users_dump.csv')
-        print(" Total Orphan Users :" + str(users_to_remove.shape[0]))
+        print(" Total Orphan Users :" + str(users_to_remove[['id_y','isAdmin']].drop_duplicates().shape[0]))
 
+        users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
         if not self.is_dryrun:
             self.logger_obj.info(f"Deactivating Orphan Users : {len(users_to_remove)}") 
             self.deactivate_users_dbx(users_to_remove)
