@@ -344,7 +344,10 @@ class scim_integrator():
                 
                 counter =0
                 for group_id in group_ids:
-                    group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
+                    if groups_df[groups_df['group_id']==group_id].shape[0]> 0:
+                        group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
+                    else:
+                        self.logger_obj.error(f"Group : {group_id} missing in groups to sync or not available in databricks")
                     counter+=1
         
 
