@@ -1087,34 +1087,35 @@ class scim_integrator():
 
         spn_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.servicePrincipal']
         # keep only unique records
-        spn_df_aad = spn_df_aad[['id', 'displayName','appId']]
-        spn_df_aad = spn_df_aad.drop_duplicates()
+        if spn_df_aad.shape[0]>0:
+            spn_df_aad = spn_df_aad[['id', 'displayName','appId']]
+            spn_df_aad = spn_df_aad.drop_duplicates()
 
-        net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['appId'], right_on=['applicationId'], how='outer')
+            net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['appId'], right_on=['applicationId'], how='outer')
 
-        spns_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
-        spns_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['applicationId'].notna())& (net_delta['active'] == True)] 
-        spns_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['applicationId'].notna()) & (net_delta['active'] == False)]
+            spns_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
+            spns_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['applicationId'].notna())& (net_delta['active'] == True)] 
+            spns_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['applicationId'].notna()) & (net_delta['active'] == False)]
 
-        if self.is_dryrun:
-            print('This is a dry run')
-        print(" Total New SPNs :" + str(spns_to_add.shape[0]))
-        print(" Total SPNs that could be deactivated :" + str(spns_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
-        print(" Total SPNs that need to be activated :" + str(spns_to_activate.shape[0]))
+            if self.is_dryrun:
+                print('This is a dry run')
+            print(" Total New SPNs :" + str(spns_to_add.shape[0]))
+            print(" Total SPNs that could be deactivated :" + str(spns_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
+            print(" Total SPNs that need to be activated :" + str(spns_to_activate.shape[0]))
 
-        if not self.is_dryrun:
-            # self.logger_obj.info(f"Creating New SPNs{len(spns_to_add)}") 
-            created_spns = self.create_spns_dbx(spns_to_add)
-            # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
+            if not self.is_dryrun:
+                # self.logger_obj.info(f"Creating New SPNs{len(spns_to_add)}") 
+                created_spns = self.create_spns_dbx(spns_to_add)
+                # self.logger_obj.info(f"Deactivating SPNs{len(spns_to_remove)}") 
 
-            # self.deactivate_spns_dbx(spns_to_remove)
+                # self.deactivate_spns_dbx(spns_to_remove)
 
-            # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
-            self.activate_spns_dbx(spns_to_activate)
+                # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
+                self.activate_spns_dbx(spns_to_activate)
 
-        if not self.is_dryrun:
-            created_users = created_users.extend(created_spns)
-            return created_users
+            if not self.is_dryrun:
+                created_users = created_users.extend(created_spns)
+        return created_users
         
     @log_decorator.log_decorator()
     def remove_dbx_group_mappings(self,mappings_to_remove):
