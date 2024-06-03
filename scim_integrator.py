@@ -52,6 +52,7 @@ class scim_integrator():
                     graph_results.append(graph_result)
                 if (pagination == True):
                     url = graph_result['@odata.nextLink']
+                    params = {}
                 else:
                     url = None
             except:
@@ -121,7 +122,6 @@ class scim_integrator():
         threads_sub= []
         if with_members:
             user_list = []
-            
             with ThreadPoolExecutor(max_workers=20) as executor_sub:
                 for index, row in master_list.iterrows():
                     # url = 'https://graph.microsoft.com/v1.0/groups'
@@ -219,15 +219,23 @@ class scim_integrator():
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
             params = {'filter': ids_string}
             req = requests.get(url=url, headers=headers, params = params)
-            assert req.status_code == 200 
+            if req.status_code != 200:
 
-            df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
-                   'active': pd.Series(dtype='bool'),
-                   'id': pd.Series(dtype='str'),
-                   'userName': pd.Series(dtype='str'),
-                   'applicationId': pd.Series(dtype='str'),
-                   'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
-            
+                df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                    'active': pd.Series(dtype='bool'),
+                    'id': pd.Series(dtype='str'),
+                    'userName': pd.Series(dtype='str'),
+                    'applicationId': pd.Series(dtype='str'),
+                    'externalId': pd.Series(dtype='str')})
+                return df
+            else:
+                df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
+                    'active': pd.Series(dtype='bool'),
+                    'id': pd.Series(dtype='str'),
+                    'userName': pd.Series(dtype='str'),
+                    'applicationId': pd.Series(dtype='str'),
+                    'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
+                
             counter = 0
             for resource in req.json()['Resources']:
 
@@ -344,12 +352,14 @@ class scim_integrator():
                 
                 counter =0
                 for group_id in group_ids:
-                    if groups_df[groups_df['group_id']==group_id].shape[0]> 0:
+                    try:
                         group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
-                    else:
-                        self.logger_obj.error(f"Group : {group_id} missing in groups to sync or not available in databricks")
-                    counter+=1
-        
+                        counter+=1
+                    except Exception as e:
+                        self.logger_obj.error(f"This Groups with ID: {group_id} is not present in groups_to_sync.sh file")
+                        print(f"This Group with ID: {group_id} is not present in groups_to_sync.sh file")
+                        
+
 
                 group_list_df['type'] = 'Group'
                 user_list_df=self.get_users_with_ids_dbx(user_ids)
@@ -456,7 +466,7 @@ class scim_integrator():
                     'externalId': pd.Series(dtype='str')}, index = range(len(req.json()['Resources'])))
                 
                 counter = 0
-                if 'Resources' in regq.json():
+                if 'Resources' in req.json():
                     for resource in req.json()['Resources']:
 
                         if 'displayName' in resource:
@@ -737,32 +747,32 @@ class scim_integrator():
             raise
     
     
-    @log_decorator.log_decorator()
-    def delete_group_dbx(self,id):
-        retry_counter = 0
-        while True:
-            account_id = self.dbx_config["account_id"]
-            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
-            token_result = self.token_dbx
+    # @log_decorator.log_decorator()
+    # def delete_group_dbx(self,id):
+    #     retry_counter = 0
+    #     while True:
+    #         account_id = self.dbx_config["account_id"]
+    #         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
+    #         token_result = self.token_dbx
 
 
-            headers = {'Authorization': 'Bearer ' + token_result }
+    #         headers = {'Authorization': 'Bearer ' + token_result }
 
-            req = requests.delete(url=url, headers=headers)
-            if req.status_code == 204:
-                self.logger_obj.info(f"delete group status{req.status_code}")
-                return req.status_code
-            else:
-                self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                if retry_counter <= 3:
-                    time.sleep(1)
-                    retry_counter+=1
-                else:
-                    self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
-                    break
+    #         req = requests.delete(url=url, headers=headers)
+    #         if req.status_code == 204:
+    #             self.logger_obj.info(f"delete group status{req.status_code}")
+    #             return req.status_code
+    #         else:
+    #             self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+    #             if retry_counter <= 3:
+    #                 time.sleep(1)
+    #                 retry_counter+=1
+    #             else:
+    #                 self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+    #                 break
    
-    @sleep_and_retry                
-    @limits(calls= 7, period=1)               
+    # @sleep_and_retry                
+    # @limits(calls= 7, period=1)               
     def create_users_request(self, userName,displayName,externalId):
         
         account_id = self.dbx_config["account_id"]
@@ -1061,6 +1071,7 @@ class scim_integrator():
 
         if self.is_dryrun:
             print('This is a dry run')
+        users_to_add.to_csv(self.log_file_dir + 'users_to_add.csv')
         print(" Total New Users :" + str(users_to_add.shape[0]))
         print(" Total Users that could be deactivated :" + str(users_to_remove.shape[0]) + ": Info Only : Deactivation will not be done")
         print(" Total Users that need to be activated :" + str(users_to_activate.shape[0]))
@@ -1183,7 +1194,7 @@ class scim_integrator():
                             members.append( {'value':user_id})
                     else:
                         print(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this")
-                        self.logger_obj.error(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this")
+                        self.logger_obj.error(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this") 
                 
                 
             
@@ -1255,17 +1266,20 @@ class scim_integrator():
         mappings_to_remove = mappings_to_remove[mappings_to_remove['group_displayName'].isin(self.groups_to_sync)]
         # Remove mappings that belong to SPNs since its handled separately
         mappings_to_remove = mappings_to_remove[mappings_to_remove['applicationId'].isna()]
-        mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
         if self.is_dryrun:
             print('This is a dry run')
-        
-        print(" Total New Mappings for Users:" + str(mappings_to_add[mappings_to_add['@odata.type'] != '#microsoft.graph.servicePrincipal'].shape[0]))
+            mappings_to_remove.to_csv(self.log_file_dir + 'mappings_to_remove_Users.csv')
+            mappings_to_add.to_csv(self.log_file_dir + 'mappings_to_add_Users.csv')
         print(" Total Mappings for Users to be removed :" + str(mappings_to_remove.shape[0])) 
+        mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
 
         if not self.is_dryrun:
+            mappings_to_remove.to_csv(self.log_file_dir + 'mappings_to_remove_Users.csv')
+            mappings_to_add.to_csv(self.log_file_dir + 'mappings_to_add_Users.csv')
             self.remove_dbx_group_mappings(mappings_to_remove)
             
             self.add_dbx_group_mappings(mappings_to_add,group_master_df,users_df_dbx)
+
 
 
 
@@ -1276,10 +1290,12 @@ class scim_integrator():
         
         mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
         mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
-        mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()
         if self.is_dryrun:
             print('This is a dry run')
-        
+            print(" Total Mappings for SPN's to be removed :")
+            mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+            mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
+        mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()   
         print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
         print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
 
@@ -1287,6 +1303,8 @@ class scim_integrator():
             self.remove_dbx_group_mappings(mappings_to_remove_spns)
             
             self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
+            mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+            mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
 
     def deactivate_deleted_users(self):
 
@@ -1298,9 +1316,11 @@ class scim_integrator():
             net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
             net_delta = net_delta[net_delta['active']== True]
             print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
+            deleted_users = net_delta['userPrincipalName']
+            deleted_users.to_csv(self.log_file_dir + 'deleted_users.csv')
             print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
             if self.is_dryrun:
-                print('This is a dry run')  
+                print('This is a dry run')
                 if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
                     print('Exporting Deactivation list')
                     net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
@@ -1310,6 +1330,9 @@ class scim_integrator():
                     print('Removing Admin users from Deletion')
                     net_delta = net_delta[net_delta['isAdmin']==False]
                 self.deactivate_users_dbx(net_delta)
+                print('Exporting Deactivation list')
+                net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
+
    
     def deactivate_orphan_users(self):
         users_df_dbx = self.get_all_user_groups_dbx()
@@ -1345,72 +1368,76 @@ class scim_integrator():
         print(" Total Orphan Users :" + str(users_to_remove[['id_y','isAdmin']].drop_duplicates().shape[0]))
 
         users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
+
         if not self.is_dryrun:
+            if users_to_remove.shape[0] > 0:
+                print('Exporting Deactivation list')
+                users_to_remove.to_csv(self.log_file_dir + 'dbx_orphan_users_dump.csv')
             self.logger_obj.info(f"Deactivating Orphan Users : {len(users_to_remove)}") 
             self.deactivate_users_dbx(users_to_remove)
 
-    def delete_users_dbx(self,users_to_delete):
-        ret_df = pd.DataFrame()
-        threads= []
-        results = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            for idx, row in users_to_delete.iterrows():
-                id = row['id']
-                account_id = self.dbx_config["account_id"]
-                threads.append(executor.submit(self.delete_user, self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"))
+    # def delete_users_dbx(self,users_to_delete):
+    #     ret_df = pd.DataFrame()
+    #     threads= []
+    #     results = []
+    #     with ThreadPoolExecutor(max_workers=20) as executor:
+    #         for idx, row in users_to_delete.iterrows():
+    #             id = row['id']
+    #             account_id = self.dbx_config["account_id"]
+    #             threads.append(executor.submit(self.delete_user, self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"))
                 
-            for task in as_completed(threads):
-                results.append(task.result())
+    #         for task in as_completed(threads):
+    #             results.append(task.result())
 
-        return results
+    #     return results
     
-    @sleep_and_retry
-    @limits(calls=7, period=1)      
-    def delete_user(self,url):
-        token_result = self.token_dbx
-        headers = {'Authorization': 'Bearer ' + token_result }
-        retry_counter = 0
-        while True:
-            req = requests.delete(url=url, headers=headers)
-            if req.status_code == 204:
-                break
-            else:
-                if retry_counter <=3 :
-                    print('Retrying Delete')
-                    time.sleep(1)
-                    retry_counter+=1
-                else:
-                    break
-        return req.content
-    @sleep_and_retry
-    @limits(calls=7, period=1)  
-    def delete_groups_dbx(self,groups_to_delete):
-        ret_df = pd.DataFrame()
-        for idx, row in groups_to_delete.iterrows():
-            id = row['id']
+    # @sleep_and_retry
+    # @limits(calls=7, period=1)      
+    # def delete_user(self,url):
+    #     token_result = self.token_dbx
+    #     headers = {'Authorization': 'Bearer ' + token_result }
+    #     retry_counter = 0
+    #     while True:
+    #         req = requests.delete(url=url, headers=headers)
+    #         if req.status_code == 204:
+    #             break
+    #         else:
+    #             if retry_counter <=3 :
+    #                 print('Retrying Delete')
+    #                 time.sleep(1)
+    #                 retry_counter+=1
+    #             else:
+    #                 break
+    #     return req.content
+    # @sleep_and_retry
+    # @limits(calls=7, period=1)  
+    # def delete_groups_dbx(self,groups_to_delete):
+    #     ret_df = pd.DataFrame()
+    #     for idx, row in groups_to_delete.iterrows():
+    #         id = row['id']
 
-            account_id = self.dbx_config["account_id"]
-            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
-            token_result = self.token_dbx
+    #         account_id = self.dbx_config["account_id"]
+    #         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
+    #         token_result = self.token_dbx
 
 
-            headers = {'Authorization': 'Bearer ' + token_result }
-            req = requests.delete(url=url, headers=headers)
-            # print(req.content)
-            try:
-                assert req.status_code == 204
-                # print(id)
-            except AssertionError:
-                if req.status_code == 409:
-                    print('User Already exists. Trying to activate user')
-                else:
-                    ('Failed Creating User')
+    #         headers = {'Authorization': 'Bearer ' + token_result }
+    #         req = requests.delete(url=url, headers=headers)
+    #         # print(req.content)
+    #         try:
+    #             assert req.status_code == 204
+    #             # print(id)
+    #         except AssertionError:
+    #             if req.status_code == 409:
+    #                 print('User Already exists. Trying to activate user')
+    #             else:
+    #                 ('Failed Creating User')
     
-    def set_test_base(self):
-        users_df_dbx = self.get_all_user_groups_dbx()
-        if users_df_dbx is not None:
-            users_df_dbx = users_df_dbx[users_df_dbx['id']!='8935314208503406']
-            self.delete_users_dbx(users_df_dbx)
-        groups_df_dbx = self.get_all_groups_dbx()
-        if groups_df_dbx is not None:
-            self.delete_groups_dbx(groups_df_dbx)
+    # def set_test_base(self):
+    #     users_df_dbx = self.get_all_user_groups_dbx()
+    #     if users_df_dbx is not None:
+    #         users_df_dbx = users_df_dbx[users_df_dbx['id']!='8935314208503406']
+    #         self.delete_users_dbx(users_df_dbx)
+    #     groups_df_dbx = self.get_all_groups_dbx()
+    #     if groups_df_dbx is not None:
+    #         self.delete_groups_dbx(groups_df_dbx)
