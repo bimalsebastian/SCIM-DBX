@@ -19,7 +19,7 @@ if __name__ == '__main__':
     with open(base_config['groups_to_sync_path']) as file:
        groups_to_sync = json.load(file)
       
-    scim_runner = scim_integrator(base_config['config'],base_config['dbx_config'],groups_to_sync ,base_config['LOG_FILE_NAME'] ,base_config['LOG_FILE_LOCATION'],is_dryrun =  base_config['is_dryrun'])
+    scim_runner = scim_integrator(base_config['config'],base_config['dbx_config'],groups_to_sync ,base_config['LOG_FILE_NAME'] ,base_config['LOG_FILE_LOCATION'],is_dryrun =  base_config['is_dryrun'], Scalable_SCIM_Enabled = False, cloud_provider ='Azure')
 
     scim_runner.auth_aad(True)
     scim_runner.auth_aad(False)
