@@ -12,9 +12,10 @@ from ratelimit import limits, RateLimitException, sleep_and_retry
 import logging
 from io import BytesIO
 import math
+from requests.auth import HTTPBasicAuth
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = False, cloud_provider='Azure'  ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
@@ -27,6 +28,8 @@ class scim_integrator():
         self.MAX_GET_CALLS_PER_SEC = 20
         self.MAX_PATCH_CALLS_PER_SEC = 2
         self.MAX_POST_CALLS_PER_SEC = 5
+        self.Scalable_SCIM_Enabled = Scalable_SCIM_Enabled
+        self.cloud_provider = cloud_provider
         
 
     # global token 
@@ -80,6 +83,18 @@ class scim_integrator():
             client = msal.ConfidentialClientApplication(self.config['client_id'], authority=self.config['authority'], client_credential=self.config['client_secret'])
             token_result = client.acquire_token_for_client(scopes=self.config['scope'])
             self.token = token_result['access_token']
+    def auth_aws_dbx(self):
+        url = f"https://accounts.cloud.databricks.com/oidc/accounts/{self.dbx_config['aws_account_id']}/v1/token"
+    
+        auth=HTTPBasicAuth(self.dbx_config['aws_user_id'], self.dbx_config['aws_password'])
+        params = {'grant_type':'client_credentials','scope':'all-apis'}
+        headers = {'Content-type': 'application/x-www-form-urlencoded'}
+        res = requests.post(url, auth=auth, data=params, headers=headers)
+        res.raise_for_status()
+
+        self.token_dbx = res.json().get("access_token")
+            
+
     def get_spn_details(self, service_principals):
         spns_df = pd.DataFrame()
         for idx, spn in service_principals.iterrows():
@@ -109,7 +124,7 @@ class scim_integrator():
             filter_params.append({'$filter' : f"displayName in ({filter_expression})",'$select':'id,displayName'})
         threads= []
         master_list = pd.DataFrame()
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:
             for filter_param in filter_params:
                 url = 'https://graph.microsoft.com/v1.0/groups'
                 threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
@@ -122,7 +137,7 @@ class scim_integrator():
         threads_sub= []
         if with_members:
             user_list = []
-            with ThreadPoolExecutor(max_workers=20) as executor_sub:
+            with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor_sub:
                 for index, row in master_list.iterrows():
                     # url = 'https://graph.microsoft.com/v1.0/groups'
                     url = 'https://graph.microsoft.com/beta/groups'
@@ -153,6 +168,60 @@ class scim_integrator():
         
         
         return users_df
+    
+    def get_users_by_username_aad(self,usernames):
+        batch_size = 10
+        split_count = round(len(usernames)/batch_size,0)
+        usernames_split = []
+        if split_count > 0 :
+            usernames_split = np.array_split(usernames, split_count)
+        else:
+            usernames_split = np.array_split(usernames, 1)
+        filter_params = []
+        user_groups_df = pd.DataFrame()
+
+        for user in usernames_split:
+            filter_expression = ', '.join(['"{}"'.format(value) for value in user])
+            filter_params.append({'$filter' : f"userPrincipalName in ({filter_expression})",'$select':'id,userPrincipalName'})
+        threads= []
+        master_list = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:
+            for filter_param in filter_params:
+                url = 'https://graph.microsoft.com/v1.0/users'
+                threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
+            for task in as_completed(threads):
+                groups_json = json.dumps(task.result())
+                groups_json = str.encode(groups_json)
+                groups_df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
+                master_list = pd.concat([master_list,groups_df])
+        return master_list
+    
+    def get_apps_by_displayName_aad(self,displayName):
+        batch_size = 10
+        split_count = round(len(displayName)/batch_size,0)
+        displayName_split = []
+        if split_count > 0 :
+            displayName_split = np.array_split(displayName, split_count)
+        else:
+            displayName_split = np.array_split(displayName, 1)
+        filter_params = [] 
+
+        for app in displayName_split:
+            filter_expression = ', '.join(['"{}"'.format(value) for value in app])
+            filter_params.append({'$filter' : f"displayName in ({filter_expression})",'$select':'appId,displayName'})
+        threads= []
+        master_list = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:
+            for filter_param in filter_params:
+                url = 'https://graph.microsoft.com/v1.0/applications'
+                threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
+            for task in as_completed(threads):
+                groups_json = json.dumps(task.result())
+                groups_json = str.encode(groups_json)
+                groups_df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
+                master_list = pd.concat([master_list,groups_df])
+        return master_list
+
     def get_delete_users_aad(self):
         url = "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$count=true&$orderby=deletedDateTime asc&$select=id,DisplayName,userPrincipalName,deletedDateTime"
         headers = {'ConsistencyLevel': 'eventual'}
@@ -257,6 +326,11 @@ class scim_integrator():
     def get_all_user_groups_dbx(self):
         try:
             batch_size = 9
+            group_ids = []
+            user_ids = [] 
+            spn_ids = []
+            groups_df = pd.DataFrame()
+            group_list_df = pd.DataFrame()
             account_id = self.dbx_config["account_id"]
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Users"
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
@@ -304,52 +378,31 @@ class scim_integrator():
                         
                     
                 # df = pd.DataFrame(index=range(totalResults))
-                counter = 0
-                ids = []
-                groups_df = pd.DataFrame()
-                for result in graph_results:
-                    resource_items = result['Resources']
-                    for resource in resource_items: 
-                        if 'members' in resource:
-                            counter=0
-                            df = pd.DataFrame(index = range(len(resource['members'])))
-                            for group in resource['members']:
-                                
-                                df.loc[counter,'group_displayName'] = resource['displayName']
-                                if 'externalId' in resource:
-                                    df.loc[counter,'group_externalId'] = resource['externalId']
-                                df.loc[counter,'group_id'] = resource['id']
-                                df.loc[counter,'user_id'] = group['value']
-                                ids.append(group['$ref'])
-                                counter+=1
-                            groups_df = pd.concat([groups_df,df])
-                        else:
-                            df = pd.DataFrame(index = range(1))
-                            df.loc[counter,'group_displayName'] = resource['displayName']
-                            if 'externalId' in resource:
-                                        df.loc[counter,'group_externalId'] = resource['externalId']
-                            df.loc[counter,'group_id'] = resource['id']
-                            df.loc[counter,'user_id'] = np.nan
-                            groups_df = pd.concat([groups_df,df])
-                
-                user_ids = []
-                spn_ids = []
-                group_ids = []
-                for id in ids:
-                    if 'Users' in id:
-                        user_ids.append(id.replace('Users/',''))
-                    elif 'ServicePrincipals' in id:
-                        spn_ids.append(id.replace('ServicePrincipals/',''))
-                    elif 'Groups' in id:
-                        group_ids.append(id.replace('Groups/',''))
-                 
-
+                if not self.Scalable_SCIM_Enabled:
+                    groups_df = pd.DataFrame()
+                    for result in graph_results:
+                        resource_items = result['Resources']
+                        _groups_df,_user_ids, _spn_ids,_group_ids  = self.extract_group_members(resource_items)
+                        if (not _groups_df.empty) and (not groups_df.empty):
+                            groups_df = pd.concat([_groups_df,groups_df])
+                        elif (not _groups_df.empty) and (groups_df.empty):
+                            groups_df=_groups_df
+                        group_ids.extend(_group_ids)
+                        user_ids.extend(_user_ids)
+                        spn_ids.extend(_spn_ids) 
+                    
+                else:
+                    groups_df,_user_ids, _spn_ids,_group_ids = self.extract_group_members_scalable(graph_results)
+                     
+                    group_ids.extend(_group_ids)
+                    user_ids.extend(_user_ids)
+                    spn_ids.extend(_spn_ids)
+                   
                 group_list_df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
                    'active': pd.Series(dtype='bool'),
                    'id': pd.Series(dtype='str'),
                    'userName': pd.Series(dtype='str'),
-                   'applicationId': pd.Series(dtype='str')},index =range(len(group_ids)))
-                
+                   'applicationId': pd.Series(dtype='str')},index =range(len(group_ids)))   
                 counter =0
                 for group_id in group_ids:
                     try:
@@ -358,8 +411,7 @@ class scim_integrator():
                     except Exception as e:
                         self.logger_obj.error(f"This Groups with ID: {group_id} is not present in groups_to_sync.sh file")
                         print(f"This Group with ID: {group_id} is not present in groups_to_sync.sh file")
-                        
-
+                            
 
                 group_list_df['type'] = 'Group'
                 user_list_df=self.get_users_with_ids_dbx(user_ids)
@@ -380,6 +432,96 @@ class scim_integrator():
             # display(groups_df.drop_duplicates())
         except Exception as X:
             self.logger_obj.error(f"Exception {X}")
+
+    def extract_group_members(self,resource_items):
+        counter = 0
+        ids = []
+        
+        groups_df = pd.DataFrame()
+        for resource in resource_items: 
+            if 'members' in resource:
+                counter=0
+                df = pd.DataFrame(index = range(len(resource['members'])))
+                for group in resource['members']:
+                    df.loc[counter,'group_displayName'] = resource['displayName']
+                    if 'externalId' in resource:
+                        df.loc[counter,'group_externalId'] = resource['externalId']
+                    df.loc[counter,'group_id'] = resource['id']
+                    df.loc[counter,'user_id'] = group['value']
+                    ids.append(group['$ref'])
+                    counter+=1
+                groups_df = pd.concat([groups_df,df])
+            else:
+                df = pd.DataFrame(index = range(1))
+                df.loc[counter,'group_displayName'] = resource['displayName']
+                if 'externalId' in resource:
+                            df.loc[counter,'group_externalId'] = resource['externalId']
+                df.loc[counter,'group_id'] = resource['id']
+                df.loc[counter,'user_id'] = np.nan
+                groups_df = pd.concat([groups_df,df])
+                
+        user_ids = []
+        spn_ids = []
+        group_ids = []
+        for id in ids:
+            if 'Users' in id:
+                user_ids.append(id.replace('Users/',''))
+            elif 'ServicePrincipals' in id:
+                spn_ids.append(id.replace('ServicePrincipals/',''))
+            elif 'Groups' in id:
+                group_ids.append(id.replace('Groups/',''))    
+        
+        return groups_df,user_ids,spn_ids,group_ids
+    
+    def extract_group_members_scalable(self, graph_results):
+        counter = 0
+        group_ids = []
+        ids = []
+        groups_df = pd.DataFrame()
+        for result in graph_results:
+            if 'Resources' in result:
+                resource_items = result['Resources']
+                for resource in resource_items: 
+                    group_ids.append(resource['id'])
+
+        # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Users"
+        
+        params = {'startIndex': '1', 'count': '1000'}
+        token_result = self.token_dbx
+        threads= []
+        group_details = []
+        # master_list = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:
+            for group_id in group_ids: 
+                
+                threads.append(executor.submit(self.get_group_details_with_id, group_id))
+            for task in as_completed(threads):
+                group_details.extend(task.result())
+
+  
+        groups_df,user_ids, spn_ids,group_ids = self.extract_group_members(group_details)
+        
+        return groups_df,user_ids, spn_ids,group_ids
+
+    def get_group_details_with_id(self, group_id):
+        try:
+            graph_results = []
+            token_result = self.token_dbx
+            headers = {'Authorization': 'Bearer ' + token_result }
+            account_id = self.dbx_config["account_id"]
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{group_id}"
+            while True:
+                req = requests.get(url=url, headers=headers)
+            
+                if req.status_code == 429:
+                    time.sleep(1) 
+                else:
+                    graph_results.append(req.json())
+                    break
+            return graph_results
+        except Exception as e:
+                    self.logger_obj.error(f"Getting Groups Details with Ids Failed")
+                    raise
     def get_users_with_ids_dbx(self,ids):
         try:
             batch_size = 100
@@ -413,9 +555,17 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
 
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
-            params = {'filter': 'userName eq `'+ nameString + '`'}
-            req = requests.get(url=url, headers=headers, params = params)
-            assert req.status_code == 200
+            params = {'filter': 'userName eq "'+ nameString + '"'}
+            
+            retry_counter=1
+            while True:
+                req = requests.get(url=url, headers=headers, params = params)
+                if req.status_code == 429 and retry_counter<=3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    break
+ 
             # df = pd.DataFrame(index = range(len(req.json()['Resources'])))
             df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
                    'active': pd.Series(dtype='bool'),
@@ -454,9 +604,16 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
 
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
-            params = {'filter': 'displayName eq `'+ appDislayName + '`'}
-            req = requests.get(url=url, headers=headers, params = params)
-            assert req.status_code == 200 
+            params = {'filter': 'displayName eq `'+ appDislayName + '`'} 
+            retry_counter=1
+            while True:
+                req = requests.get(url=url, headers=headers, params = params)
+                if req.status_code == 429 and retry_counter<=3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    break
+
             if 'Resources' in req.json():
                 df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
                     'active': pd.Series(dtype='bool'),
@@ -711,6 +868,67 @@ class scim_integrator():
         except Exception as e:
             self.logger_obj.error(f"Getting All User Details Failed")
             raise
+    def get_all_spns_dbx(self):
+        try:
+            account_id = self.dbx_config["account_id"]
+            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
+            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
+            
+            token_result = self.token_dbx
+
+
+            headers = {'Authorization': 'Bearer ' + token_result }
+
+
+            graph_results = []
+            index = 0
+            totalResults = 100
+            itemsPerPage = 100
+            params = {'startIndex': index, 'count': itemsPerPage}
+            while index < totalResults:
+                retry_counter = 0
+                while True:
+   
+                    params = {'startIndex': index, 'count': itemsPerPage}
+                    req = requests.get(url=url, headers=headers, params=params)
+                    if req.status_code == 200:
+                        totalResults = req.json()['totalResults']
+                        itemsPerPage = req.json()['itemsPerPage']
+                        index += int(itemsPerPage)
+                        graph_results.append(req.json()) 
+                        break
+                    else:
+                        self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                        if retry_counter <= 3:
+                            time.sleep(1)
+                            retry_counter+=1
+                        else:
+                            self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                            break
+
+            df = pd.DataFrame({'id': pd.Series(dtype='str'),
+                   'applicationId': pd.Series(dtype='str'),
+                   'displayName': pd.Series(dtype='str'),
+                   'externalId': pd.Series(dtype='str'),
+                   'active': pd.Series(dtype='bool')},index=range(totalResults))
+            
+            counter = 0
+            for result in graph_results:
+                resource_item = result['Resources']
+                for resource in resource_item:
+
+                    df.loc[counter,"id"] = resource["id"]
+                    df.loc[counter,"applicationId"] = resource["applicationId"]
+                    df.loc[counter,"displayName"] = resource["displayName"]
+                    if 'externalId' in resource:
+                        df.loc[counter,"externalId"] = resource["externalId"]
+                    df.loc[counter,"active"] = resource["active"]
+                    counter+=1
+            return df
+        except Exception as e:
+            self.logger_obj.error(f"Getting All User Details Failed")
+            raise
+
     @log_decorator.log_decorator()
     def create_group_dbx(self,displayName,externalId):
         try:
@@ -791,6 +1009,8 @@ class scim_integrator():
         while True:
             if req.status_code == 201 :
                 return req.status_code
+            elif req.status_code == 409:
+                return req.status_code
             else:
                 self.logger_obj.error(f"Failed Creating User. {userName}: Attempting Retry") 
                 if retry_counter <= 3:
@@ -806,12 +1026,17 @@ class scim_integrator():
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
         token_result = self.token_dbx
-        payload = {
-            "applicationId": applicationId,
-            "displayName": displayName,
-            "externalId" : externalId
-            }
-
+        if self.cloud_provider == 'AWS':
+            payload = {
+                "displayName": displayName,
+                "externalId" : externalId
+                }
+        elif self.cloud_provider == 'Azure':
+            payload = {
+                            "applicationId": applicationId,
+                            "displayName": displayName,
+                            "externalId" : externalId
+                            }
         headers = {'Authorization': 'Bearer ' + token_result }
         retry_counter = 0
         req = requests.post(url=url, headers=headers, json = payload)
@@ -834,7 +1059,7 @@ class scim_integrator():
         ret_df = pd.DataFrame()
         threads= []
         results = []
-        with ThreadPoolExecutor(max_workers=5) as executor:            
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_post_resource_limit"]) as executor:            
             for idx, row in users_to_add.iterrows():
                 userName = row['userPrincipalName']
                 displayName = row['displayName_x']
@@ -851,7 +1076,7 @@ class scim_integrator():
         ret_df = pd.DataFrame()
         threads= []
         results = []
-        with ThreadPoolExecutor(max_workers=20) as executor:            
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_post_resource_limit"]) as executor:            
             for idx, row in spns_to_add.iterrows():
                 applicationId = row['appId']
                 displayName = row['displayName_x']
@@ -1056,7 +1281,7 @@ class scim_integrator():
         # get all users that belong in atleast one group
         users_df_aad_all = self.get_all_groups_aad(True)
         users_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.user']
-        # keep only unique records
+        # keep only unique records  
         users_df_aad = users_df_aad[['id', 'displayName',  'userPrincipalName']]
         users_df_aad = users_df_aad.drop_duplicates()
         # lower case for join
@@ -1091,8 +1316,8 @@ class scim_integrator():
             spn_df_aad = spn_df_aad[['id', 'displayName','appId']]
             spn_df_aad = spn_df_aad.drop_duplicates()
 
-            net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['appId'], right_on=['applicationId'], how='outer')
-
+            # net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['appId'], right_on=['applicationId'], how='outer')
+            net_delta = spn_df_aad.merge(spns_df_dbx, left_on=['displayName'], right_on=['displayName'], how='outer')
             spns_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
             spns_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['applicationId'].notna())& (net_delta['active'] == True)] 
             spns_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['applicationId'].notna()) & (net_delta['active'] == False)]
@@ -1146,7 +1371,7 @@ class scim_integrator():
                 headers = {'Authorization': 'Bearer ' + token_result }
 
                 req = requests.patch(url=url, headers=headers, json = payload)
-                if req.status_code == 200:
+                if (req.status_code == 200) or (req.status_code == 204):
                     self.logger_obj.info(f"Following Users : {operation_set[item]}  were removed from group:{item}") 
                     break
                 else:
@@ -1161,45 +1386,57 @@ class scim_integrator():
     def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
         mapping_set = {}
         unique_groups = mappings_to_add['group_id_x'].drop_duplicates()
-        for g_idx,group_id in unique_groups.items():
-            members = []
+        all_users_df = self.get_all_users_dbx()
+        all_spns_df = self.get_all_spns_dbx()
 
-            for idx,row in mappings_to_add[mappings_to_add['group_id_x']==group_id].iterrows():
+        mappings_to_add_updated = mappings_to_add[['group_id_x','userPrincipalName','@odata.type','displayName_x']].merge(all_users_df[['userName','id']], left_on=['userPrincipalName'], right_on=['userName'], how='left')
+        mappings_to_add_updated.columns = ['group_id','userPrincipalName','@odata.type','displayName','userName','id']
+        mappings_to_add_updated = mappings_to_add_updated.merge(all_spns_df[['displayName','id']], left_on=['displayName'], right_on=['displayName'], how='left')
+        mappings_to_add_updated['id'] = mappings_to_add_updated['id_x'].fillna(mappings_to_add_updated['id_y'])
+        mappings_to_add_updated = mappings_to_add_updated.drop('id_x', axis=1)
+        mappings_to_add_updated = mappings_to_add_updated.drop('id_y', axis=1)
+        mappings_to_add_updated = mappings_to_add_updated.merge(group_master_df[['displayName','id']], left_on=['userPrincipalName'], right_on=['displayName'], how='left')
+        mappings_to_add_updated['id'] = mappings_to_add_updated['id_x'].fillna(mappings_to_add_updated['id_y'])
+        mappings_to_add_updated = mappings_to_add_updated.drop('id_x', axis=1)
+        mappings_to_add_updated = mappings_to_add_updated.drop('id_y', axis=1)
 
-                if len(group_master_df[group_master_df['externalId']==row['group_id_x']]) >0 :
-                    group_id = str(group_master_df[group_master_df['externalId']==row['group_id_x']].iloc[0]['id'])
-                    mapping_set[group_id] = members
-                # if len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']]) >0 :
-                if row['@odata.type']=='#microsoft.graph.user':
-                    if (len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']])>0):
-                        user_id = str(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']].iloc[0]['id'])
-                        members.append( {'value':user_id})
-                    else:
-                        df = self.get_user_details_with_userName_dbx(row['userPrincipalName'])
-                        if df.shape[0]>0:
-                            user_id = df.iloc[0]['id']
-                            members.append( {'value':user_id})
-                elif row['@odata.type']=='#microsoft.graph.servicePrincipal':
-                    if (len(users_df_dbx[users_df_dbx['applicationId']==row['appId']])>0):
-                        user_id = str(users_df_dbx[users_df_dbx['applicationId']==row['appId']].iloc[0]['id'])
-                        members.append( {'value':user_id})
-                    else:
-                        df = self.get_spn_details_with_appDisplayName_dbx(row['appDisplayName'])
-                        if df.shape[0]>0:
-                            user_id = df.iloc[0]['id']
-                            members.append( {'value':user_id})
-                elif row['@odata.type']=='#microsoft.graph.group':
-                    if row["id_x"] in list(group_master_df["externalId"]):
-                        if (len(group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id'])>0):
-                            user_id = group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id']
-                            members.append( {'value':user_id})
-                    else:
-                        print(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this")
-                        self.logger_obj.error(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this") 
+         
+        
+        # with ThreadPoolExecutor(max_workers=20) as executor:
+        for g_idx,group_external_id in unique_groups.items():
+            if len(group_master_df[group_master_df['externalId']==group_external_id])>0:
+                members = []   
+                group_id = str(group_master_df[group_master_df['externalId']==group_external_id].iloc[0]['id'])
+                ids = list(mappings_to_add_updated[mappings_to_add_updated['group_id']==group_external_id]['id'].dropna())
+                for id in ids:
+                    members.append( {'value':id})
+                mapping_set[group_id] = members
+                # threads.append(executor.submit(self.get_group_member_mapping_set,mappings_to_add, group_master_df, users_df_dbx, group_external_id))
+                                               
+                # mapping_set.append(self.get_group_member_mapping_set())
+            # for task in as_completed(threads):
+            #     mapping_set.append(task.result())
+     
                 
-                
+        try:
+            threads = []
+            result = []
+            with ThreadPoolExecutor(max_workers=self.dbx_config["account_patch_resource_limit"]) as executor:    
+                for item in mapping_set:
+                    threads.append(executor.submit(self.patch_group_mapping,item,mapping_set[item]))
+                for task in as_completed(threads):
+                    result.append(task.result())
             
-        for item in mapping_set:
+            for status in result:
+                if not((status['status_code'] == '200') or (status['status_code'] == '204')):
+                    self.logger_obj.error(f"Failed to deactivate user with dbx_id:{status['group_id']} error : {status['status_code']}") 
+        except Exception as e:
+            self.logger_obj.error(f"Failed to deactivate user with dbx_id:{status['group_id']} error : {str(e)}") 
+            # self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+
+    def patch_group_mapping(self,group_id, members):
+        try:    
+            # group_id = next(iter(item_dict))
             # print(item)
             # print(mapping_set[item])
             retry_counter = 0
@@ -1213,7 +1450,7 @@ class scim_integrator():
                         {
                         "op": "add",
                         "value": {
-                        "members": mapping_set[item]
+                        "members": members
                         }
                         }
                         ]
@@ -1221,23 +1458,68 @@ class scim_integrator():
 
 
                 account_id = self.dbx_config["account_id"] 
-                url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{item}"
+                url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{group_id}"
                 token_result = self.token_dbx
 
                 headers = {'Authorization': 'Bearer ' + token_result }
                 
                 req = requests.patch(url=url, headers=headers, json = payload)
-                if req.status_code == 200:
-                    self.logger_obj.info(f"User mapping created for items:{item}") 
+                if (req.status_code == 200) or (req.status_code == 204):
+                    self.logger_obj.info(f"User mapping created for items:{group_id}") 
+                    return {'groupd_id':group_id,'status_code':str(req.status_code)}
                     break
                 else:
-                    self.logger_obj.error(f"Group mapping creation failed for items:{item}") 
+                    self.logger_obj.error(f"Group mapping creation failed for items:{group_id}") 
                     self.logger_obj.error(f"Group mapping creation failed for items : {req.status_code} and reason :{req.reason}. Attempting Retry")
                     if retry_counter <= 3:
                         time.sleep(1)
                         retry_counter+=1
                     else:
-                        break  
+                        return {'groupd_id':group_id,'status_code':req.reason}
+                        break
+        except Exception as e:
+            self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id} error : {str(e)}") 
+            self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+    
+
+    def get_group_member_mapping_set(self, mappings_to_add, group_master_df, users_df_dbx, group_external_id):
+        members = []
+
+        
+
+
+        for idx,row in mappings_to_add[mappings_to_add['group_id_x']==group_external_id].iterrows():
+            if len(group_master_df[group_master_df['externalId']==row['group_id_x']]) >0 :
+                group_id = str(group_master_df[group_master_df['externalId']==row['group_id_x']].iloc[0]['id'])
+                # mapping_set[group_id] = members
+                # if len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']]) >0 :
+            if row['@odata.type']=='#microsoft.graph.user':
+                if (len(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']])>0):
+                    user_id = str(users_df_dbx[users_df_dbx['userName']==row['userPrincipalName']].iloc[0]['id'])
+                    members.append( {'value':user_id})  
+                else:
+                    df = self.get_user_details_with_userName_dbx(row['userPrincipalName'])
+                    if df.shape[0]>0:
+                        user_id = df.iloc[0]['id']
+                        members.append( {'value':user_id})
+            elif row['@odata.type']=='#microsoft.graph.servicePrincipal':
+                if (len(users_df_dbx[users_df_dbx['applicationId']==row['appId']])>0):
+                    user_id = str(users_df_dbx[users_df_dbx['applicationId']==row['appId']].iloc[0]['id'])
+                    members.append( {'value':user_id})
+                else:
+                    df = self.get_spn_details_with_appDisplayName_dbx(row['appDisplayName'])
+                    if df.shape[0]>0:
+                        user_id = df.iloc[0]['id']
+                        members.append( {'value':user_id})
+            elif row['@odata.type']=='#microsoft.graph.group':
+                if row["id_x"] in list(group_master_df["externalId"]):
+                    if (len(group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id'])>0):
+                        user_id = group_master_df[group_master_df['externalId']==row['id_x']].iloc[0]['id']
+                        members.append( {'value':user_id})
+                else:
+                    print(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this")
+                    self.logger_obj.error(f"Group:{row['displayName_x']} is missing in groups_to_sync.json. Skipping this")
+        return {group_id:members}
 
 
     def sync_mappings(self):
@@ -1308,31 +1590,54 @@ class scim_integrator():
             mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
 
     def deactivate_deleted_users(self):
+        all_users_dbx_df = self.get_all_users_dbx()
+        all_spns_dbx_df = self.get_all_spns_dbx()
+        unique_usernames_dbx = all_users_dbx_df['userName'].unique()
+        unique_spns_dbx = all_spns_dbx_df['displayName'].unique()
+        unique_usernames_dbx = [x.lower() for x in unique_usernames_dbx]
+        unique_spns_dbx = [x.lower() for x in unique_spns_dbx]
 
-        delete_users_df = self.get_delete_users_aad()
-        if (delete_users_df is not None) and (not delete_users_df.empty): 
-            all_users_dbx_df = self.get_all_user_groups_dbx()
+        all_users_aad_df = self.get_users_by_username_aad(unique_usernames_dbx)
+        all_spns_aad_df = self.get_apps_by_displayName_aad(unique_spns_dbx)
 
-            delete_users_df['userPrincipalName'] = delete_users_df['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
-            net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
-            net_delta = net_delta[net_delta['active']== True]
-            print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
-            deleted_users = net_delta['userPrincipalName']
-            deleted_users.to_csv(self.log_file_dir + 'deleted_users.csv')
-            print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
-            if self.is_dryrun:
-                print('This is a dry run')
-                if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
-                    print('Exporting Deactivation list')
-                    net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
+        unique_usernames_aad = all_users_aad_df['userPrincipalName'].unique()
+        unique_spns_aad = all_spns_aad_df['displayName'].unique()
+        unique_usernames_aad = [x.lower() for x in unique_usernames_aad]
+        unique_spns_aad = [x.lower() for x in unique_spns_aad]
 
-            else:
-                if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
-                    print('Removing Admin users from Deletion')
-                    net_delta = net_delta[net_delta['isAdmin']==False]
-                self.deactivate_users_dbx(net_delta)
-                print('Exporting Deactivation list')
-                net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
+        users_to_be_removed = list([x for x in unique_usernames_dbx if x not in unique_usernames_aad])
+        apps_to_be_removed = list([x for x in unique_spns_dbx if x not in (unique_spns_aad)])
+        ids_to_be_removed = []
+        ids_to_be_removed.extend(list(all_users_dbx_df[all_users_dbx_df['userName'].isin(users_to_be_removed)]['id']))
+        ids_to_be_removed.extend(list(all_spns_dbx_df[all_spns_dbx_df['displayName'].isin(apps_to_be_removed)]['id']))
+
+        df_ids_to_be_removed = pd.DataFrame({'id_y':ids_to_be_removed})
+        self.deactivate_users_dbx(df_ids_to_be_removed)
+
+        # delete_users_df = self.get_delete_users_aad()
+        # if (delete_users_df is not None) and (not delete_users_df.empty): 
+        #     all_users_dbx_df = self.get_all_user_groups_dbx()
+
+        #     delete_users_df['userPrincipalName'] = delete_users_df['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        #     net_delta = delete_users_df.merge(all_users_dbx_df, left_on=['userPrincipalName'], right_on=['userName'], how='inner')
+        #     net_delta = net_delta[net_delta['active']== True]
+        #     print(" Total Deleted Users detected:" + str(len(net_delta['userPrincipalName'].unique())))
+        #     deleted_users = net_delta['userPrincipalName']
+        #     deleted_users.to_csv(self.log_file_dir + 'deleted_users.csv')
+        #     print(" Total Admins Users detected for deletion:" + str(len(net_delta[net_delta['isAdmin']==True]['userPrincipalName'].unique())))
+        #     if self.is_dryrun:
+        #         print('This is a dry run')
+        #         if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
+        #             print('Exporting Deactivation list')
+        #             net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
+
+        #     else:
+        #         if net_delta[net_delta['isAdmin']==True].shape[0] > 0:
+        #             print('Removing Admin users from Deletion')
+        #             net_delta = net_delta[net_delta['isAdmin']==False]
+        #         self.deactivate_users_dbx(net_delta)
+        #         print('Exporting Deactivation list')
+        #         net_delta[net_delta['isAdmin']==False].to_csv(self.log_file_dir + 'azure_deleted_users_dump.csv')
 
    
     def deactivate_orphan_users(self):
