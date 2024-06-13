@@ -12,6 +12,11 @@ dbx_config:
   azure_tenant_id: <Azure Tenant ID>
   client_id: <Client ID for azure SPN>
   client_secret: <Client Secret for azure SPN>
+  aws_user_id: <SPN ClientID for AWS>
+  aws_password: <SPN Client Secret from AWS>
+  account_get_resource_limit : 20
+  account_post_resource_limit: 5
+  account_patch_resource_limit: 3
 
 LOG_FILE_LOCATION: '/Users/bimal.sebastian/SourceCode/tmp/'
 LOG_FILE_NAME : log
