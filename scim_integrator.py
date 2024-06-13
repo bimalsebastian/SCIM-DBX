@@ -858,8 +858,8 @@ class scim_integrator():
             for result in graph_results:
                 resource_item = result['Resources']
                 for resource in resource_item:
-
-                    df.loc[counter,"displayName"] = resource["displayName"]
+                    if 'displayName' in resource:
+                        df.loc[counter,"displayName"] = resource["displayName"]
                     df.loc[counter,"userName"] = resource["userName"]
                     df.loc[counter,"active"] = resource["active"]
                     df.loc[counter,"id"] = resource["id"]
@@ -919,7 +919,8 @@ class scim_integrator():
 
                     df.loc[counter,"id"] = resource["id"]
                     df.loc[counter,"applicationId"] = resource["applicationId"]
-                    df.loc[counter,"displayName"] = resource["displayName"]
+                    if 'displayName' in resource:
+                        df.loc[counter,"displayName"] = resource["displayName"]
                     if 'externalId' in resource:
                         df.loc[counter,"externalId"] = resource["externalId"]
                     df.loc[counter,"active"] = resource["active"]
@@ -1595,7 +1596,7 @@ class scim_integrator():
         unique_usernames_dbx = all_users_dbx_df['userName'].unique()
         unique_spns_dbx = all_spns_dbx_df['displayName'].unique()
         unique_usernames_dbx = [x.lower() for x in unique_usernames_dbx]
-        unique_spns_dbx = [x.lower() for x in unique_spns_dbx]
+        unique_spns_dbx = [str(x).lower() for x in unique_spns_dbx]
 
         all_users_aad_df = self.get_users_by_username_aad(unique_usernames_dbx)
         all_spns_aad_df = self.get_apps_by_displayName_aad(unique_spns_dbx)
