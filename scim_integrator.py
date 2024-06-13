@@ -1476,7 +1476,7 @@ class scim_integrator():
                         time.sleep(1)
                         retry_counter+=1
                     else:
-                        return {'groupd_id':group_id,'status_code':req.reason}
+                        return {'group_id':group_id,'status_code':req.reason}
                         break
         except Exception as e:
             self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id} error : {str(e)}") 
