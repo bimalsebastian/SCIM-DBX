@@ -1555,6 +1555,7 @@ class scim_integrator():
             mappings_to_remove.to_csv(self.log_file_dir + 'mappings_to_remove_Users.csv')
             mappings_to_add.to_csv(self.log_file_dir + 'mappings_to_add_Users.csv')
         print(" Total Mappings for Users to be removed :" + str(mappings_to_remove.shape[0])) 
+        print(" Total Mappings for Users to be added :" + str(mappings_to_add.shape[0])) 
         mappings_to_remove = mappings_to_remove[['id_y','group_id_y']].drop_duplicates()
 
         if not self.is_dryrun:
@@ -1566,29 +1567,29 @@ class scim_integrator():
 
 
 
-
-
-        net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id','appId'], right_on=['group_externalId','applicationId'], how='outer')
-        net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] =='#microsoft.graph.servicePrincipal']
-        mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
-        
-        mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
-        mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
-        if self.is_dryrun:
-            print('This is a dry run')
-            print(" Total Mappings for SPN's to be removed :")
-            mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
-            mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
-        mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()   
-        print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
-        print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
-
-        if not self.is_dryrun:
-            self.remove_dbx_group_mappings(mappings_to_remove_spns)
+        # this check validates if there any spns to be synced
+        if 'appId' in users_df_dbx.columns:
+            net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id','appId'], right_on=['group_externalId','applicationId'], how='outer')
+            net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] =='#microsoft.graph.servicePrincipal']
+            mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
             
-            self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
-            mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
-            mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
+            mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
+            mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
+            if self.is_dryrun:
+                print('This is a dry run')
+                print(" Total Mappings for SPN's to be removed :")
+                mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+                mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
+            mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()   
+            print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
+            print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
+
+            if not self.is_dryrun:
+                self.remove_dbx_group_mappings(mappings_to_remove_spns)
+                
+                self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
+                mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+                mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
 
     def deactivate_deleted_users(self):
         all_users_dbx_df = self.get_all_users_dbx()
