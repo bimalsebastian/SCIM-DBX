@@ -158,6 +158,33 @@ class scim_integrator():
             return master_list
                 
         return user_groups_df
+    
+    def get_all_groups_aad_member_count(self):
+        params = {'$select':'id, displayName'}
+        threads = []
+        url = 'https://graph.microsoft.com/v1.0/groups'
+        resp = self.make_graph_get_call( url, True, params=params)
+        groups_json = json.dumps(resp)
+        groups_json = str.encode(groups_json)
+        groups_df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
+        groups_df['member_count'] = 0
+        total_count = 0
+        for idx, row in groups_df.iterrows():
+            group_id = row['id']
+            params = {'$count':'true','ConsistencyLevel':'eventual','$select':'id'}
+            url = f'https://graph.microsoft.com/v1.0/groups/{group_id}/members/'
+            resp = self.make_graph_get_call( url, True, params=params)
+            if len(resp)>0:
+                if '@odata.count' in resp[0]:
+                    member_count = resp['@odata.count']
+                else:
+                    member_count = len(resp)
+                groups_df['member_count'].iloc[idx] = member_count
+                total_count+=member_count
+                # if total_count>=20000:
+                #     break
+        return groups_df
+
     @lru_cache(maxsize=256, typed=True)
     def get_all_users_aad(self):
         url = 'https://graph.microsoft.com/v1.0/users'
@@ -348,8 +375,12 @@ class scim_integrator():
                     group_ids_filter = np.array_split(self.groups_to_sync, 1)
                 graph_results = []
                 for group_filter in group_ids_filter:
-                    filter_string = '` or displayName eq `'.join(group_filter)
-                    filter_string = 'displayName eq `' + filter_string + '`'
+                    if self.Scalable_SCIM_Enabled:
+                        filter_string = '" or displayName eq "'.join(group_filter)
+                        filter_string = 'displayName eq "' + filter_string + '"'
+                    else:
+                        filter_string = '` or displayName eq `'.join(group_filter)
+                        filter_string = 'displayName eq `' + filter_string + '`'
 
                     
                     index = 0
@@ -1080,7 +1111,7 @@ class scim_integrator():
         with ThreadPoolExecutor(max_workers=self.dbx_config["account_post_resource_limit"]) as executor:            
             for idx, row in spns_to_add.iterrows():
                 applicationId = row['appId']
-                displayName = row['displayName_x']
+                displayName = row['displayName']
                 externalId = row['id_x']
                 threads.append(executor.submit(self.create_spns_request, applicationId,displayName,externalId))
 
@@ -1348,23 +1379,36 @@ class scim_integrator():
         operation_set = {}
         unique_groups = mappings_to_remove['group_id_y'].drop_duplicates()
         for g_idx,group_id in unique_groups.items():
-            members = []
-            for idx,row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
-                user_id = row['id_y']
-                members.append( {"op": "remove",'path': f"members.value[value eq {user_id}]"})
-                operation_set[group_id] = members
+            members = []    
+            if self.Scalable_SCIM_Enabled:
+                for idx,row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
+                    user_id = row['id_y']
+                    members.append({'value':int(user_id)})
+                    operation_set[group_id] = {"op": "remove","path": "members","value":members}
+            else:
+                for idx,row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
+                    user_id = row['id_y']
+                    members.append( {"op": "remove",'path': f"members.value[value eq {user_id}]"})
+                    operation_set[group_id] = members
 
         # print(operation_set)
         for item in operation_set: 
             retry_counter = 0
             while True:
-
-                payload = {
+                if self.Scalable_SCIM_Enabled:
+                    payload = {
                         "schemas": [
                         "urn:ietf:params:scim:api:messages:2.0:PatchOp"
                         ],
-                        "Operations": operation_set[item]
+                        "Operations": [operation_set[item]]
                         }
+                else:
+                    payload = {
+                            "schemas": [
+                            "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+                            ],
+                            "Operations": operation_set[item]
+                            }
                 account_id = self.dbx_config["account_id"] 
                 url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{item}"
 
