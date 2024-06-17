@@ -565,13 +565,26 @@ class scim_integrator():
             else:
                 ids = np.array_split(ids, 1)
             
-            for id_set in ids: 
-                ids_string = ' or id eq '.join(id_set)
-                ids_string = 'id eq ' + ids_string
-                # print(ids_string)
-                df = self.get_user_details_dbx(ids_string)
-                # display(df)
-                user_list_df = pd.concat([user_list_df,df])
+            threads = []
+            results=[]
+            with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:            
+                for id_set in ids: 
+                    ids_string = ' or id eq '.join(id_set)
+                    ids_string = 'id eq ' + ids_string 
+
+                    threads.append(executor.submit(self.get_user_details_dbx, ids_string))
+
+            for task in as_completed(threads):
+                results.append(task.result()) 
+
+            user_list_df = pd.concat(results)
+            # for id_set in ids: 
+            #     ids_string = ' or id eq '.join(id_set)
+            #     ids_string = 'id eq ' + ids_string
+            #     # print(ids_string)
+            #     df = self.get_user_details_dbx(ids_string)
+            #     # display(df)
+            #     user_list_df = pd.concat([user_list_df,df])
 
             
             return user_list_df
@@ -694,13 +707,26 @@ class scim_integrator():
             
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
             
-            for id_set in ids: 
-                ids_string = ' or id eq '.join(id_set)
-                ids_string = 'id eq ' + ids_string
-                # print(ids_string)
-                df = self.get_spn_details_dbx(ids_string)
-                # display(df)
-                spn_list_df = pd.concat([spn_list_df,df])
+            threads = []
+            results=[]
+            with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:            
+                for id_set in ids: 
+                    ids_string = ' or id eq '.join(id_set)
+                    ids_string = 'id eq ' + ids_string 
+
+                    threads.append(executor.submit(self.get_spn_details_dbx, ids_string))
+
+            for task in as_completed(threads):
+                results.append(task.result()) 
+
+            spn_list_df = pd.concat(results)
+            # for id_set in ids: 
+            #     ids_string = ' or id eq '.join(id_set)
+            #     ids_string = 'id eq ' + ids_string
+            #     # print(ids_string)
+            #     df = self.get_spn_details_dbx(ids_string)
+            #     # display(df)
+            #     spn_list_df = pd.concat([spn_list_df,df])
 
             return spn_list_df
         except Exception as e:
