@@ -870,41 +870,30 @@ class scim_integrator():
         
     def get_all_users_dbx(self):
         try:
-            account_id = self.dbx_config["account_id"]
-            # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
-            url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
-            
-            token_result = self.token_dbx
-
-
-            headers = {'Authorization': 'Bearer ' + token_result }
-
+        
 
             graph_results = []
-            index = 0
+            start_index = 0
             totalResults = 100
             itemsPerPage = 100
-            params = {'startIndex': index, 'count': itemsPerPage}
-            while index < totalResults:
-                retry_counter = 0
-                while True:
-   
-                    params = {'startIndex': index, 'count': itemsPerPage}
-                    req = requests.get(url=url, headers=headers, params=params)
-                    if req.status_code == 200:
-                        totalResults = req.json()['totalResults']
-                        itemsPerPage = req.json()['itemsPerPage']
-                        index += int(itemsPerPage)
-                        graph_results.append(req.json()) 
-                        break
-                    else:
-                        self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                        if retry_counter <= 3:
-                            time.sleep(1)
-                            retry_counter+=1
-                        else:
-                            self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
-                            break
+            
+            req_json = self.get_all_users_call_api(start_index,itemsPerPage)
+            if 'totalResults' in req_json:
+                totalResults = req_json['totalResults']
+            batches = [x for x in range(math.ceil(totalResults/100))]
+            start_index = 0
+            threads = []
+            with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:            
+                for batch in batches:
+            
+                    if start_index<= totalResults: 
+                        threads.append(executor.submit(self.get_all_users_call_api, start_index,itemsPerPage))
+                    start_index +=100
+                for task in as_completed(threads):
+                    graph_results.append(task.result()) 
+
+            # while index < totalResults:
+            #     totalResults = self.get_all_users_call_api(url, headers, graph_results, index, itemsPerPage)
 
             df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
                    'userName': pd.Series(dtype='str'),
@@ -921,10 +910,37 @@ class scim_integrator():
                     df.loc[counter,"active"] = resource["active"]
                     df.loc[counter,"id"] = resource["id"]
                     counter+=1
-            return df
+            return df.drop_duplicates()
         except Exception as e:
             self.logger_obj.error(f"Getting All User Details Failed")
             raise
+
+    def get_all_users_call_api(self,index, itemsPerPage):
+        account_id = self.dbx_config["account_id"] 
+        url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
+        
+        token_result = self.token_dbx
+
+
+        headers = {'Authorization': 'Bearer ' + token_result }
+        retry_counter = 0
+        while True:
+            params = {'startIndex': index, 'count': itemsPerPage}
+            req = requests.get(url=url, headers=headers, params=params)
+            if req.status_code == 200:
+                totalResults = req.json()['totalResults']
+                itemsPerPage = req.json()['itemsPerPage']
+                index += int(itemsPerPage)
+                return req.json()
+            else:
+                self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                if retry_counter <= 3:
+                    time.sleep(1)
+                    retry_counter+=1
+                else:
+                    self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                    break
+        return json.dumps({})
     def get_all_spns_dbx(self):
         try:
             account_id = self.dbx_config["account_id"]
@@ -1460,12 +1476,25 @@ class scim_integrator():
         all_users_df = self.get_all_users_dbx()
         all_spns_df = self.get_all_spns_dbx()
 
+        mappings_to_add['userPrincipalName'] = mappings_to_add['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        all_users_df['userName'] = all_users_df['userName'].apply(lambda s:s.lower() if type(s) == str else s)
+        all_spns_df['displayName'] = all_spns_df['displayName'].apply(lambda s:s.lower() if type(s) == str else s)
+        group_master_df['displayName'] = group_master_df['displayName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+
+
         mappings_to_add_updated = mappings_to_add[['group_id_x','userPrincipalName','@odata.type','displayName_x']].merge(all_users_df[['userName','id']], left_on=['userPrincipalName'], right_on=['userName'], how='left')
         mappings_to_add_updated.columns = ['group_id','userPrincipalName','@odata.type','displayName','userName','id']
+
+        mappings_to_add_updated['displayName'] = mappings_to_add_updated['displayName'].apply(lambda s:s.lower() if type(s) == str else s)
+
         mappings_to_add_updated = mappings_to_add_updated.merge(all_spns_df[['displayName','id']], left_on=['displayName'], right_on=['displayName'], how='left')
         mappings_to_add_updated['id'] = mappings_to_add_updated['id_x'].fillna(mappings_to_add_updated['id_y'])
         mappings_to_add_updated = mappings_to_add_updated.drop('id_x', axis=1)
         mappings_to_add_updated = mappings_to_add_updated.drop('id_y', axis=1)
+
+        mappings_to_add_updated['userPrincipalName'] = mappings_to_add_updated['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+
         mappings_to_add_updated = mappings_to_add_updated.merge(group_master_df[['displayName','id']], left_on=['userPrincipalName'], right_on=['displayName'], how='left')
         mappings_to_add_updated['id'] = mappings_to_add_updated['id_x'].fillna(mappings_to_add_updated['id_y'])
         mappings_to_add_updated = mappings_to_add_updated.drop('id_x', axis=1)
