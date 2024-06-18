@@ -1492,7 +1492,7 @@ class scim_integrator():
     @log_decorator.log_decorator()
     def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
         mapping_set = {}
-        unique_groups = set(mappings_to_add['group_id_x'])
+        unique_groups = list(set(mappings_to_add['group_id_x']))
         all_users_df = self.get_all_users_dbx()
         all_spns_df = self.get_all_spns_dbx()
 
