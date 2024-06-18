@@ -1100,18 +1100,38 @@ class scim_integrator():
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
         token_result = self.token_dbx
+
+        headers = {'Authorization': 'Bearer ' + token_result }
         if self.cloud_provider == 'AWS':
+            filter_value = f'displayName eq "{displayName}"'
+            params = {'filter':filter_value}
             payload = {
                 "displayName": displayName,
                 "externalId" : externalId
                 }
+            # check if spn already exists
+            req = requests.get(url=url, headers=headers, params=params)
+            while True:
+                if req.status_code == 200:
+                        if 'Resources' in req.json():
+                            self.logger_obj.error(f"Service Principal with same display name. {displayName} already exists") 
+                            return req.status_code
+                    
+                else :
+                    self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Attempting Retry") 
+                    if retry_counter <= 3:
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Retry Failed. Continuing") 
+                        break
+
         elif self.cloud_provider == 'Azure':
             payload = {
                             "applicationId": applicationId,
                             "displayName": displayName,
                             "externalId" : externalId
                             }
-        headers = {'Authorization': 'Bearer ' + token_result }
         retry_counter = 0
         req = requests.post(url=url, headers=headers, json = payload)
         while True:
@@ -1472,7 +1492,7 @@ class scim_integrator():
     @log_decorator.log_decorator()
     def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
         mapping_set = {}
-        unique_groups = mappings_to_add['group_id_x'].drop_duplicates()
+        unique_groups = set(mappings_to_add['group_id_x'])
         all_users_df = self.get_all_users_dbx()
         all_spns_df = self.get_all_spns_dbx()
 
