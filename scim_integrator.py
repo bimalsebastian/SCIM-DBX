@@ -1533,7 +1533,7 @@ class scim_integrator():
          
         
         # with ThreadPoolExecutor(max_workers=20) as executor:
-        for g_idx,group_external_id in unique_groups.items():
+        for group_external_id in unique_groups:
             if len(group_master_df[group_master_df['externalId']==group_external_id])>0:
                 members = []   
                 group_id = str(group_master_df[group_master_df['externalId']==group_external_id].iloc[0]['id'])
