@@ -272,8 +272,18 @@ class scim_integrator():
 
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
             params = {'filter': ids_string}
-            req = requests.get(url=url, headers=headers, params = params)
-            assert req.status_code == 200
+            retry_counter = 0
+            while True:
+                req = requests.get(url=url, headers=headers, params = params)
+                if req.status_code == 200:
+                    break
+                else:
+                    if retry_counter <=3 :
+                        print('Retrying Delete')
+                        time.sleep(1)
+                        retry_counter+=1
+                    else:
+                        break
             # df = pd.DataFrame(index = range(len(req.json()['Resources'])))
             df = pd.DataFrame({'displayName': pd.Series(dtype='str'),
                    'active': pd.Series(dtype='bool'),
@@ -302,7 +312,7 @@ class scim_integrator():
             return df
         
         except Exception as e:
-            self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
+            self.logger_obj.error(f"Fetching User Details Failed with status : {str(e)}")
             raise
 
     def get_spn_details_dbx(self,ids_string):
