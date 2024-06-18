@@ -151,6 +151,8 @@ class scim_integrator():
                     user_list = str.encode(user_list)
                     df = pd.read_json(BytesIO(user_list),dtype='unicode',convert_dates=False)
                     df['group_id'] = result[0]
+                    if len(master_list[master_list['id']==result[0]])>0: 
+                        df['aad_group_displayName'] = str(master_list[master_list['id']==result[0]]['displayName'].iloc[0]).lower()
                     # print(result[0])
                     user_groups_df = pd.concat([user_groups_df,df])
                 
@@ -1502,7 +1504,7 @@ class scim_integrator():
     @log_decorator.log_decorator()
     def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
         mapping_set = {}
-        unique_groups = list(set(mappings_to_add['group_id_x']))
+        unique_groups = mappings_to_add[['group_id_x','aad_group_displayName']].drop_duplicates().to_dict(orient = 'records')
         all_users_df = self.get_all_users_dbx()
         all_spns_df = self.get_all_spns_dbx()
 
@@ -1513,8 +1515,8 @@ class scim_integrator():
 
 
 
-        mappings_to_add_updated = mappings_to_add[['group_id_x','userPrincipalName','@odata.type','displayName_x']].merge(all_users_df[['userName','id']], left_on=['userPrincipalName'], right_on=['userName'], how='left')
-        mappings_to_add_updated.columns = ['group_id','userPrincipalName','@odata.type','displayName','userName','id']
+        mappings_to_add_updated = mappings_to_add[['group_id_x','userPrincipalName','@odata.type','displayName_x','aad_group_displayName']].merge(all_users_df[['userName','id']], left_on=['userPrincipalName'], right_on=['userName'], how='left')
+        mappings_to_add_updated.columns = ['group_id','userPrincipalName','@odata.type','displayName','aad_group_displayName','userName','id']
 
         mappings_to_add_updated['displayName'] = mappings_to_add_updated['displayName'].apply(lambda s:s.lower() if type(s) == str else s)
 
@@ -1533,11 +1535,18 @@ class scim_integrator():
          
         
         # with ThreadPoolExecutor(max_workers=20) as executor:
-        for group_external_id in unique_groups:
-            if len(group_master_df[group_master_df['externalId']==group_external_id])>0:
+        for group in unique_groups:
+            if len(group_master_df[group_master_df['externalId']==group['group_id_x']])>0:
                 members = []   
-                group_id = str(group_master_df[group_master_df['externalId']==group_external_id].iloc[0]['id'])
-                ids = list(mappings_to_add_updated[mappings_to_add_updated['group_id']==group_external_id]['id'].dropna())
+                group_id = str(group_master_df[group_master_df['externalId']==group['group_id_x']].iloc[0]['id'])
+                ids = list(mappings_to_add_updated[mappings_to_add_updated['group_id']==group['group_id_x']]['id'].dropna())
+                for id in ids:
+                    members.append( {'value':id})
+                mapping_set[group_id] = members
+            elif len(group_master_df[group_master_df['displayName']==group['aad_group_displayName']])>0:
+                members = []   
+                group_id = str(group_master_df[group_master_df['displayName']==group['aad_group_displayName']].iloc[0]['id'])
+                ids = list(mappings_to_add_updated[mappings_to_add_updated['aad_group_displayName']==group['aad_group_displayName']]['id'].dropna())
                 for id in ids:
                     members.append( {'value':id})
                 mapping_set[group_id] = members
