@@ -362,7 +362,7 @@ class scim_integrator():
         except Exception as e:
             self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
             raise
-    def get_all_user_groups_dbx(self):
+    def get_all_user_groups_dbx(self, all_groups = False):
         try:
             batch_size = 9
             group_ids = []
@@ -380,43 +380,48 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
 
             try:
-                filter_batch_size = math.ceil(len(self.groups_to_sync)/ 30)
-                if len(self.groups_to_sync) > filter_batch_size:
-                    group_ids_filter = np.array_split(self.groups_to_sync, filter_batch_size)
-                else:
-                    group_ids_filter = np.array_split(self.groups_to_sync, 1)
                 graph_results = []
-                for group_filter in group_ids_filter:
-                    if self.Scalable_SCIM_Enabled:
-                        filter_string = '" or displayName eq "'.join(group_filter)
-                        filter_string = 'displayName eq "' + filter_string + '"'
+                if not all_groups:
+                    filter_batch_size = math.ceil(len(self.groups_to_sync)/ 30)
+                    if len(self.groups_to_sync) > filter_batch_size:
+                        group_ids_filter = np.array_split(self.groups_to_sync, filter_batch_size)
                     else:
-                        filter_string = '` or displayName eq `'.join(group_filter)
-                        filter_string = 'displayName eq `' + filter_string + '`'
+                        group_ids_filter = np.array_split(self.groups_to_sync, 1)
+                    
+                    for group_filter in group_ids_filter:
+                        if self.Scalable_SCIM_Enabled:
+                            filter_string = '" or displayName eq "'.join(group_filter)
+                            filter_string = 'displayName eq "' + filter_string + '"'
+                        else:
+                            filter_string = '` or displayName eq `'.join(group_filter)
+                            filter_string = 'displayName eq `' + filter_string + '`'
 
                     
-                    index = 0
-                    totalResults = 100
-                    itemsPerPage = 100
-                    while index < totalResults: 
+                index = 0
+                totalResults = 100
+                itemsPerPage = 100
+                while index < totalResults:
+                    if not all_groups:
                         params = {'startIndex': str(index), 'count': itemsPerPage, 'filter': filter_string}
-                        retry_counter = 0
-                        while True:
-                            req = requests.get(url=url, headers=headers, params=params)
-                            if req.status_code == 200:
-                                totalResults = req.json()['totalResults']
-                                itemsPerPage = req.json()['itemsPerPage']
-                                index += int(itemsPerPage)
-                                graph_results.append(req.json()) 
-                                break
+                    else:
+                        params = {'startIndex': str(index), 'count': itemsPerPage}
+                    retry_counter = 0
+                    while True:
+                        req = requests.get(url=url, headers=headers, params=params)
+                        if req.status_code == 200:
+                            totalResults = req.json()['totalResults']
+                            itemsPerPage = req.json()['itemsPerPage']
+                            index += int(itemsPerPage)
+                            graph_results.append(req.json()) 
+                            break
+                        else:
+                            self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                            if retry_counter <= 3:
+                                time.sleep(1)
+                                retry_counter+=1
                             else:
-                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                                if retry_counter <= 3:
-                                    time.sleep(1)
-                                    retry_counter+=1
-                                else:
-                                    self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
-                                    break
+                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                                break
                                 
                         
                     
@@ -1796,31 +1801,37 @@ class scim_integrator():
 
    
     def deactivate_orphan_users(self):
-        users_df_dbx = self.get_all_user_groups_dbx()
+        users_df_dbx = self.get_all_user_groups_dbx(True)
+        users_df_dbx = users_df_dbx[users_df_dbx['group_displayName']!='account users']
         spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
         users_df_dbx = users_df_dbx[users_df_dbx['applicationId'].isna()]
         # lower case for join
         users_df_dbx['userName'] = users_df_dbx['userName'].apply(lambda s:s.lower() if type(s) == str else s)
 
+        all_users = self.get_all_users_dbx()
         # users_df_dbx.display()
 
-        # get all users that belong in atleast one group
-        users_df_aad_all = self.get_all_groups_aad(True)
-        users_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.user']
-        # keep only unique records
-        users_df_aad = users_df_aad[['id', 'displayName',  'userPrincipalName']]
-        users_df_aad = users_df_aad.drop_duplicates()
-        # lower case for join
-        users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
-        # users_df_aad.display()
+        net_delta = all_users.merge(users_df_dbx, left_on=['userName'], right_on=['userName'], how='left')
 
-        net_delta = users_df_aad.merge(users_df_dbx, left_on=['userPrincipalName'], right_on=['userName'], how='outer')
+        users_to_remove = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())& (net_delta['active_x'] == True)] 
 
-        users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
-        valid_users = users_to_remove.query('group_displayName not in @self.groups_to_sync & group_displayName != "account users"')['id_y'].unique()
-        users_to_remove = users_to_remove.query('id_y not in @valid_users') 
-        users_to_remove = users_to_remove.query('isAdmin != True') 
-        users_to_remove = users_to_remove.query('type != "Group"') 
+        # # get all users that belong in atleast one group
+        # users_df_aad_all = self.get_all_groups_aad(True)
+        # users_df_aad = users_df_aad_all[users_df_aad_all['@odata.type']=='#microsoft.graph.user']
+        # # keep only unique records
+        # users_df_aad = users_df_aad[['id', 'displayName',  'userPrincipalName']]
+        # users_df_aad = users_df_aad.drop_duplicates()
+        # # lower case for join
+        # users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
+        # # users_df_aad.display()
+
+        # net_delta = users_df_aad.merge(users_df_dbx, left_on=['userPrincipalName'], right_on=['userName'], how='outer')
+
+        # users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
+        # valid_users = users_to_remove.query('group_displayName not in @self.groups_to_sync & group_displayName != "account users"')['id_y'].unique()
+        # users_to_remove = users_to_remove.query('id_y not in @valid_users') 
+        # users_to_remove = users_to_remove.query('isAdmin != True') 
+        # users_to_remove = users_to_remove.query('type != "Group"') 
         if self.is_dryrun:
             print('This is a dry run')
             if users_to_remove.shape[0] > 0:
@@ -1828,7 +1839,9 @@ class scim_integrator():
                 users_to_remove.to_csv(self.log_file_dir + 'dbx_orphan_users_dump.csv')
         print(" Total Orphan Users :" + str(users_to_remove[['id_y','isAdmin']].drop_duplicates().shape[0]))
 
-        users_to_remove = users_to_remove[['id_y','isAdmin']].drop_duplicates()
+        users_to_remove = users_to_remove[['id_x','isAdmin']].drop_duplicates()
+        users_to_remove.columns = ['id_y','isAdmin']
+
 
         if not self.is_dryrun:
             if users_to_remove.shape[0] > 0:
