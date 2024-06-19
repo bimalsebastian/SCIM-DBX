@@ -281,7 +281,7 @@ class scim_integrator():
                     break
                 else:
                     if retry_counter <=3 :
-                        print('Retrying Delete')
+                        print('Retrying get Users')
                         time.sleep(1)
                         retry_counter+=1
                     else:
@@ -452,7 +452,7 @@ class scim_integrator():
                         group_list_df.loc[counter] = [groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],True,group_id, groups_df[groups_df['group_id']==group_id].iloc[0]['group_displayName'],np.nan]
                         counter+=1
                     except Exception as e:
-                        self.logger_obj.error(f"This Groups with ID: {group_id} is not present in groups_to_sync.sh file")
+                        self.logger_obj.warning(f"This Groups with ID: {group_id} is not present in groups_to_sync.sh file")
                         print(f"This Group with ID: {group_id} is not present in groups_to_sync.sh file")
                             
 
@@ -1442,10 +1442,12 @@ class scim_integrator():
                 # self.deactivate_spns_dbx(spns_to_remove)
 
                 # self.logger_obj.info(f"Activating SPNs{len(spns_to_activate)}") 
-                self.activate_spns_dbx(spns_to_activate)
+                self.activate_spns_dbx(spns_to_activate)    
 
             if not self.is_dryrun:
                 created_users = created_users.extend(created_spns)
+            else:
+                return None
         return created_users
         
     @log_decorator.log_decorator()
@@ -1677,17 +1679,26 @@ class scim_integrator():
         for idx,row in users_df_aad.iterrows():
             if row['@odata.type'] == '#microsoft.graph.group':
                 users_df_aad.iloc[idx]['userPrincipalName'] = str(row['displayName']).lower()
+            elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
+                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['appDisplayName']).lower()
 
-        net_delta = users_df_aad.merge(users_df_dbx, left_on=['group_id','userPrincipalName'], right_on=['group_externalId','userName'], how='outer')
+
+        users_df_aad['aad_group_displayName'] = users_df_aad['aad_group_displayName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+        users_df_dbx['group_displayName'] = users_df_dbx['group_displayName'].apply(lambda s:s.lower() if type(s) == str else s)
+
+        # net_delta = users_df_aad.merge(users_df_dbx, left_on=['group_id','userPrincipalName'], right_on=['group_externalId','userName'], how='outer')
+        net_delta = users_df_aad.merge(users_df_dbx, left_on=['aad_group_displayName','userPrincipalName'], right_on=['group_displayName','userName'], how='outer')
         mappings_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna())]
         
         group_master_df = self.get_all_groups_dbx()
 
-        mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_externalId'].notna())]
+        # mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_externalId'].notna())]
+        mappings_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna()) & (net_delta['group_displayName'].notna())]
         # manage only removals for groups in sync list
-        mappings_to_remove = mappings_to_remove[mappings_to_remove['group_displayName'].isin(self.groups_to_sync)]
+        mappings_to_remove = mappings_to_remove[mappings_to_remove['group_displayName'].isin([x.lower() for x in self.groups_to_sync])]
         # Remove mappings that belong to SPNs since its handled separately
-        mappings_to_remove = mappings_to_remove[mappings_to_remove['applicationId'].isna()]
+        # mappings_to_remove = mappings_to_remove[mappings_to_remove['applicationId'].isna()]
         if self.is_dryrun:
             print('This is a dry run')
             mappings_to_remove.to_csv(self.log_file_dir + 'mappings_to_remove_Users.csv')
@@ -1752,8 +1763,12 @@ class scim_integrator():
         ids_to_be_removed.extend(list(all_spns_dbx_df[all_spns_dbx_df['displayName'].isin(apps_to_be_removed)]['id']))
 
         df_ids_to_be_removed = pd.DataFrame({'id_y':ids_to_be_removed})
-        self.deactivate_users_dbx(df_ids_to_be_removed)
-
+        if not self.is_dryrun:
+            self.deactivate_users_dbx(df_ids_to_be_removed)
+        else:
+            if df_ids_to_be_removed.shape[0] > 0:
+                print('Exporting Deactivation list for deleted users')
+                df_ids_to_be_removed.to_csv(self.log_file_dir + 'dbx_deleted_users_dump.csv')
         # delete_users_df = self.get_delete_users_aad()
         # if (delete_users_df is not None) and (not delete_users_df.empty): 
         #     all_users_dbx_df = self.get_all_user_groups_dbx()
