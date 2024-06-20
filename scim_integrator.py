@@ -397,31 +397,31 @@ class scim_integrator():
                             filter_string = 'displayName eq `' + filter_string + '`'
 
                     
-                index = 0
-                totalResults = 100
-                itemsPerPage = 100
-                while index < totalResults:
-                    if not all_groups:
-                        params = {'startIndex': str(index), 'count': itemsPerPage, 'filter': filter_string}
-                    else:
-                        params = {'startIndex': str(index), 'count': itemsPerPage}
-                    retry_counter = 0
-                    while True:
-                        req = requests.get(url=url, headers=headers, params=params)
-                        if req.status_code == 200:
-                            totalResults = req.json()['totalResults']
-                            itemsPerPage = req.json()['itemsPerPage']
-                            index += int(itemsPerPage)
-                            graph_results.append(req.json()) 
-                            break
-                        else:
-                            self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                            if retry_counter <= 3:
-                                time.sleep(1)
-                                retry_counter+=1
+                        index = 0
+                        totalResults = 100
+                        itemsPerPage = 100
+                        while index < totalResults:
+                            if not all_groups:
+                                params = {'startIndex': str(index), 'count': itemsPerPage, 'filter': filter_string}
                             else:
-                                self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
-                                break
+                                params = {'startIndex': str(index), 'count': itemsPerPage}
+                            retry_counter = 0
+                            while True:
+                                req = requests.get(url=url, headers=headers, params=params)
+                                if req.status_code == 200:
+                                    totalResults = req.json()['totalResults']
+                                    itemsPerPage = req.json()['itemsPerPage']
+                                    index += int(itemsPerPage)
+                                    graph_results.append(req.json()) 
+                                    break
+                                else:
+                                    self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
+                                    if retry_counter <= 3:
+                                        time.sleep(1)
+                                        retry_counter+=1
+                                    else:
+                                        self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
+                                        break
                                 
                         
                     
