@@ -15,7 +15,7 @@ import math
 from requests.auth import HTTPBasicAuth
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = False, cloud_provider='Azure'  ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = True, cloud_provider='Azure'  ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
