@@ -13,14 +13,17 @@ import logging
 from io import BytesIO
 import math
 from requests.auth import HTTPBasicAuth
+import datetime
 
 class scim_integrator():
-    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = True, cloud_provider='Azure'  ):
+    def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = False, cloud_provider='Azure'  ):
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
         self.token = token
         self.token_dbx = token_dbx
+        self.dbx_token_expiry = datetime.datetime.now()
+        self.aad_token_expiry = datetime.datetime.now()
         self.is_dryrun = is_dryrun
         self.log_file_name = log_file_name
         self.log_file_dir = log_file_dir
@@ -37,7 +40,7 @@ class scim_integrator():
    
     def make_graph_get_call(self,url, pagination=True, params = {},key = '', headers_in = {}):
 
-        token = self.token
+        token = self.get_aad_token()
 
         headers =  {'Authorization': 'Bearer ' + token}
         headers = {**headers, **headers_in}
@@ -76,13 +79,26 @@ class scim_integrator():
             initial_header = {'Content-type': 'application/x-www-form-urlencoded'}
             res = requests.post(url, data=post_data, headers=initial_header)
             res.raise_for_status()
-
+            self.dbx_token_expiry = datetime.datetime.now() + datetime.timedelta(res.json()['expires_in'] - 30)
             self.token_dbx = res.json().get("access_token")
             
         else:
             client = msal.ConfidentialClientApplication(self.config['client_id'], authority=self.config['authority'], client_credential=self.config['client_secret'])
             token_result = client.acquire_token_for_client(scopes=self.config['scope'])
             self.token = token_result['access_token']
+    def get_dbx_token(self):
+        if datetime.datetime.now()>= self.dbx_token_expiry:
+            if self.cloud_provider == 'Azure':
+                self.auth_aad(True)
+            else:
+                self.auth_aws_dbx()
+        return self.token_dbx
+    
+    def get_aad_token(self):
+        if datetime.datetime.now()>= self.aad_token_expiry:
+            self.auth_aad(False)
+        return self.token
+
     def auth_aws_dbx(self):
         url = f"https://accounts.cloud.databricks.com/oidc/accounts/{self.dbx_config['account_id']}/v1/token"
     
@@ -91,7 +107,7 @@ class scim_integrator():
         headers = {'Content-type': 'application/x-www-form-urlencoded'}
         res = requests.post(url, auth=auth, data=params, headers=headers)
         res.raise_for_status()
-
+        self.dbx_token_expiry = datetime.datetime.now() + datetime.timedelta(res.json()['expires_in'] - 30)
         self.token_dbx = res.json().get("access_token")
             
 
@@ -268,7 +284,7 @@ class scim_integrator():
     def get_user_details_dbx(self,ids_string):
         try:
             account_id = self.dbx_config["account_id"] 
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
             headers = {'Authorization': 'Bearer ' + token_result }
 
@@ -320,7 +336,7 @@ class scim_integrator():
     def get_spn_details_dbx(self,ids_string):
         try:
             account_id = self.dbx_config["account_id"] 
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
             headers = {'Authorization': 'Bearer ' + token_result }
 
@@ -374,7 +390,7 @@ class scim_integrator():
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Users"
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
             params = {'startIndex': '1', 'count': '100'}
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
 
             headers = {'Authorization': 'Bearer ' + token_result }
@@ -535,7 +551,7 @@ class scim_integrator():
         # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Users"
         
         params = {'startIndex': '1', 'count': '1000'}
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
         threads= []
         group_details = []
         # master_list = pd.DataFrame()
@@ -554,7 +570,7 @@ class scim_integrator():
     def get_group_details_with_id(self, group_id):
         try:
             graph_results = []
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
             headers = {'Authorization': 'Bearer ' + token_result }
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{group_id}"
@@ -611,7 +627,7 @@ class scim_integrator():
     def get_user_details_with_userName_dbx(self,nameString):
         try:
             account_id = self.dbx_config["account_id"] 
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
             headers = {'Authorization': 'Bearer ' + token_result }
 
@@ -660,7 +676,7 @@ class scim_integrator():
     def get_spn_details_with_appDisplayName_dbx(self,appDislayName):
         try:
             account_id = self.dbx_config["account_id"] 
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
             headers = {'Authorization': 'Bearer ' + token_result }
 
@@ -756,7 +772,7 @@ class scim_integrator():
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
             params = {'startIndex': '1', 'count': '100'}
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
 
             headers = {'Authorization': 'Bearer ' + token_result }
@@ -807,7 +823,7 @@ class scim_integrator():
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
         
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
 
 
 
@@ -861,7 +877,7 @@ class scim_integrator():
         account_id = self.dbx_config["account_id"]
                     # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/workspaces"  
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
         headers = {'Authorization': 'Bearer ' + token_result }
         req = requests.get(url=url, headers=headers)
         if req.status_code == 200:
@@ -936,7 +952,7 @@ class scim_integrator():
         account_id = self.dbx_config["account_id"] 
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
         
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
 
 
         headers = {'Authorization': 'Bearer ' + token_result }
@@ -964,7 +980,7 @@ class scim_integrator():
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
             
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
 
             headers = {'Authorization': 'Bearer ' + token_result }
@@ -1025,7 +1041,7 @@ class scim_integrator():
         try:
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
 
 
             headers = {'Authorization': 'Bearer ' + token_result }
@@ -1062,7 +1078,7 @@ class scim_integrator():
     #     while True:
     #         account_id = self.dbx_config["account_id"]
     #         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
-    #         token_result = self.token_dbx
+    #         token_result = self.get_dbx_token()
 
 
     #         headers = {'Authorization': 'Bearer ' + token_result }
@@ -1086,7 +1102,7 @@ class scim_integrator():
         
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
         payload = {
             "userName": userName,
             "displayName": displayName,
@@ -1116,7 +1132,7 @@ class scim_integrator():
     def create_spns_request(self, applicationId,displayName,externalId):
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
 
         headers = {'Authorization': 'Bearer ' + token_result }
         if self.cloud_provider == 'AWS':
@@ -1201,7 +1217,7 @@ class scim_integrator():
         # return ret_df
     @log_decorator.log_decorator()    
     def deactivate_users_dbx(self,users_to_remove):
-        token_result = self.token_dbx
+        token_result = self.get_dbx_token()
         headers = {'Authorization': 'Bearer ' + token_result }
         payload = {
                     "schemas": [
@@ -1244,7 +1260,7 @@ class scim_integrator():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals/{id}"
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
             retry_counter =0
             while True:
                 headers = {'Authorization': 'Bearer ' + token_result }
@@ -1280,7 +1296,7 @@ class scim_integrator():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users/{id}"
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
             retry_counter =0
             while True:
                 headers = {'Authorization': 'Bearer ' + token_result }
@@ -1314,7 +1330,7 @@ class scim_integrator():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals/{id}"
-            token_result = self.token_dbx
+            token_result = self.get_dbx_token()
             retry_counter = 0
             while True:
                 headers = {'Authorization': 'Bearer ' + token_result }
@@ -1400,8 +1416,11 @@ class scim_integrator():
         # users_df_aad.display()
 
         net_delta = users_df_aad.merge(users_df_dbx, left_on=['userPrincipalName'], right_on=['userName'], how='outer')
-
+        all_existing_users_df = self.get_all_users_dbx()
+        all_existing_users_list = list(all_existing_users_df[all_existing_users_df['active']==True]['displayName'])
         users_to_add = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].isna()) ]
+        users_to_add = users_to_add[~users_to_add['userPrincipalName'].isin(all_existing_users_list)]
+
         users_to_remove = net_delta[(net_delta['id_x'].isna()) & (net_delta['id_y'].notna())& (net_delta['active'] == True)] 
         users_to_activate = net_delta[(net_delta['id_x'].notna()) & (net_delta['id_y'].notna()) & (net_delta['active'] == False)]
 
@@ -1493,7 +1512,7 @@ class scim_integrator():
                 account_id = self.dbx_config["account_id"] 
                 url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{item}"
 
-                token_result = self.token_dbx
+                token_result = self.get_dbx_token()
                 headers = {'Authorization': 'Bearer ' + token_result }
 
                 req = requests.patch(url=url, headers=headers, json = payload)
@@ -1575,9 +1594,9 @@ class scim_integrator():
             
             for status in result:
                 if not((status['status_code'] == '200') or (status['status_code'] == '204')):
-                    self.logger_obj.error(f"Failed to deactivate user with dbx_id:{status['group_id']} error : {status['status_code']}") 
+                    self.logger_obj.error(f"Failed to add mapping for user with dbx_id:{status['group_id']} error : {status['status_code']}") 
         except Exception as e:
-            self.logger_obj.error(f"Failed to deactivate user with dbx_id:{status['group_id']} error : {str(e)}") 
+            self.logger_obj.error(f"Failed to add mapping error : {str(e)}") 
             # self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
 
     def patch_group_mapping(self,group_id, members):
@@ -1605,7 +1624,7 @@ class scim_integrator():
 
                 account_id = self.dbx_config["account_id"] 
                 url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{group_id}"
-                token_result = self.token_dbx
+                token_result = self.get_dbx_token()
 
                 headers = {'Authorization': 'Bearer ' + token_result }
                 
@@ -1868,7 +1887,7 @@ class scim_integrator():
     # @sleep_and_retry
     # @limits(calls=7, period=1)      
     # def delete_user(self,url):
-    #     token_result = self.token_dbx
+    #     token_result = self.get_dbx_token()
     #     headers = {'Authorization': 'Bearer ' + token_result }
     #     retry_counter = 0
     #     while True:
@@ -1892,7 +1911,7 @@ class scim_integrator():
 
     #         account_id = self.dbx_config["account_id"]
     #         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{id}"
-    #         token_result = self.token_dbx
+    #         token_result = self.get_dbx_token()
 
 
     #         headers = {'Authorization': 'Bearer ' + token_result }
