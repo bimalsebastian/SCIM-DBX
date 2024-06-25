@@ -177,6 +177,75 @@ class scim_integrator():
                 
         return user_groups_df
     
+    def get_all_groups_nested_aad(self, parent_groups):
+        
+        batch_size = 10
+        split_count = round(len(parent_groups)/batch_size,0)
+        groups_to_sync_split = []
+        if split_count > 0 :
+            groups_to_sync_split = np.array_split(parent_groups, split_count)
+        else:
+            groups_to_sync_split = np.array_split(parent_groups, 1)
+        filter_params = []
+        user_groups_df = pd.DataFrame()
+
+        for group_set in groups_to_sync_split:
+            filter_expression = ', '.join(['"{}"'.format(value) for value in group_set])
+            filter_params.append({'$filter' : f"displayName in ({filter_expression})",'$select':'id,displayName'})
+        threads= []
+        master_list = pd.DataFrame()
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor:
+            for filter_param in filter_params:
+                url = 'https://graph.microsoft.com/v1.0/groups'
+                threads.append(executor.submit(self.make_graph_get_call, url, True, filter_param))
+            for task in as_completed(threads):
+                groups_json = json.dumps(task.result())
+                groups_json = str.encode(groups_json)
+                groups_df = pd.read_json(BytesIO(groups_json),dtype='unicode',convert_dates=False)
+                master_list = pd.concat([master_list,groups_df])
+
+        threads_sub= []
+        
+        user_list = []
+        with ThreadPoolExecutor(max_workers=self.dbx_config["account_get_resource_limit"]) as executor_sub:
+            for index, row in master_list.iterrows():
+                url = 'https://graph.microsoft.com/beta/groups'
+                params = {'$filter':'','$select':'id, displayName'}
+
+                group_id = row['id']
+                threads_sub.append(executor_sub.submit(self.make_graph_get_call, url+'/'+ group_id+'/members/microsoft.graph.group', True, params =params , key= group_id))
+            for sub_task in as_completed(threads_sub):
+                result =sub_task.result()
+                user_list = json.dumps(result[1])
+                user_list = str.encode(user_list)
+                df = pd.read_json(BytesIO(user_list),dtype='unicode',convert_dates=False)
+                df['group_id'] = result[0]
+                if len(master_list[master_list['id']==result[0]])>0: 
+                    df['aad_group_displayName'] = str(master_list[master_list['id']==result[0]]['displayName'].iloc[0]).lower()
+                # print(result[0])
+                user_groups_df = pd.concat([user_groups_df,df])
+                
+        if user_groups_df.shape[0]>0:        
+            return user_groups_df
+        else:
+            return None
+    def dump_json(self, new_groups_to_sync, path):
+
+        with open(path, 'w') as outfile:
+            json.dump(new_groups_to_sync, outfile, ensure_ascii=False, indent=4)     
+    
+    def populate_groups_to_sync(self, path):
+        iter_groups_to_sync = self.groups_to_sync
+        all_groups = self.get_all_groups_nested_aad(iter_groups_to_sync)
+
+        new_parents = list(all_groups[~all_groups['displayName'].isin(iter_groups_to_sync)]['displayName'])
+        while len(new_parents)>0:
+            all_groups = self.get_all_groups_nested_aad(iter_groups_to_sync)
+            new_parents = list(all_groups[~all_groups['displayName'].isin(iter_groups_to_sync)]['displayName'])
+            iter_groups_to_sync.extend(new_parents)
+        
+        self.dump_json(iter_groups_to_sync, path)
+
     def get_all_groups_aad_member_count(self):
         params = {'$select':'id, displayName'}
         threads = []
