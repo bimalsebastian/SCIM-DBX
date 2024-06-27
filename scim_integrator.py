@@ -16,7 +16,43 @@ from requests.auth import HTTPBasicAuth
 import datetime
 
 class scim_integrator():
+    """
+    A class to integrate Azure Active Directory with Databricks Account Console using SCIM.
+    
+    This class provides functionality to sync users, groups, and their mappings between 
+    Azure AD and Databricks. It supports both regular and scalable SCIM APIs, allowing 
+    integration for up to 50,000 users.
+
+    Attributes:
+        config (dict): Configuration for Azure AD connection.
+        dbx_config (dict): Configuration for Databricks connection.
+        groups_to_sync (list): List of AD groups to be synced.
+        token (str): Azure AD authentication token.
+        token_dbx (str): Databricks authentication token.
+        is_dryrun (bool): Flag to indicate if operations should be simulated.
+        log_file_name (str): Name of the log file.
+        log_file_dir (str): Directory for log files.
+        logger_obj (logging.Logger): Logger object for the class.
+        MAX_GET_CALLS_PER_SEC (int): Rate limit for GET API calls.
+        MAX_PATCH_CALLS_PER_SEC (int): Rate limit for PATCH API calls.
+        MAX_POST_CALLS_PER_SEC (int): Rate limit for POST API calls.
+    """
+    
     def __init__(self, config, dbx_config, groups_to_sync, log_file_name, log_file_dir, token_dbx = '', token = '', is_dryrun = True,Scalable_SCIM_Enabled = False, cloud_provider='Azure'  ):
+        """
+        Initialize the scim_integrator instance.
+
+        Args:
+            config (dict): Configuration for Azure AD connection.
+            dbx_config (dict): Configuration for Databricks connection.
+            groups_to_sync (list): List of AD groups to be synced.
+            log_file_name (str): Name of the log file.
+            log_file_dir (str): Directory for log files.
+            token_dbx (str, optional): Databricks authentication token. Defaults to ''. Optional in case this has to be overridden.
+            token (str, optional): Azure AD authentication token. Defaults to ''. Optional in case this has to be overridden.
+            is_dryrun (bool, optional): Flag to indicate if operations should be simulated. Defaults to True.
+        """
+        
         self.config = config
         self.dbx_config = dbx_config
         self.groups_to_sync = groups_to_sync
@@ -39,7 +75,26 @@ class scim_integrator():
     # global token_dbx     
    
     def make_graph_get_call(self,url, pagination=True, params = {},key = '', headers_in = {}):
+        """
+        Make a GET request to the Microsoft Graph API.
 
+        This function handles pagination and supports both regular and batch requests.
+        It uses exponential backoff for retrying failed requests.
+
+        Args:
+            url (str): The API endpoint URL.
+            pagination (bool, optional): Whether to handle pagination. Defaults to True.
+            params (dict, optional): Query parameters for the request. Defaults to {}.
+            key (str, optional): Key for batch requests. Defaults to ''.
+            headers_in (dict, optional): Additional headers for the request. Defaults to {}.
+
+        Returns:
+            tuple or list: If key is provided, returns a tuple of (key, results).
+                           Otherwise, returns a list of results.
+
+        Raises:
+            Logs errors for failed requests after retry attempts.
+        """
         token = self.get_aad_token()
 
         headers =  {'Authorization': 'Bearer ' + token}
@@ -69,6 +124,20 @@ class scim_integrator():
             return key, graph_results
 
     def auth_aad(self,isAccount =True):
+        """
+        Authenticate with Azure Active Directory or Azure Databricks.
+
+        This function obtains an authentication token either for Azure AD or Databricks,
+        depending on the isAccount parameter. It uses client credentials flow for authentication.
+
+        Args:
+            isAccount (bool, optional): If True, authenticate with Azure Databricks. 
+                                        If False, authenticate with Azure AD. Defaults to True.
+
+        Raises:
+            Logs errors for failed authentication attempts.
+        """
+        
         if isAccount:
             url = f"https://login.microsoftonline.com/{self.dbx_config['azure_tenant_id']}/oauth2/v2.0/token"
         
@@ -87,6 +156,21 @@ class scim_integrator():
             token_result = client.acquire_token_for_client(scopes=self.config['scope'])
             self.token = token_result['access_token']
     def get_dbx_token(self):
+        """
+        Retrieve a valid Databricks token, refreshing if necessary.
+
+        This method checks if the current Databricks token is expired. If it is, it generates a new token
+        using the appropriate authentication method based on the cloud provider (Azure or AWS).
+
+        Returns:
+            str: A valid Databricks authentication token.
+
+        Notes:
+            - Uses self.cloud_provider to determine the appropriate authentication method.
+            - For Azure, it calls auth_aad(True).
+            - For AWS, it calls auth_aws_dbx().
+            - Manages token expiration to ensure a valid token is always returned.
+        """
         if datetime.datetime.now()>= self.dbx_token_expiry:
             if self.cloud_provider == 'Azure':
                 self.auth_aad(True)
@@ -95,11 +179,40 @@ class scim_integrator():
         return self.token_dbx
     
     def get_aad_token(self):
+        """
+        Retrieve a valid Azure Active Directory (AAD) token, refreshing if necessary.
+
+        This method checks if the current AAD token is expired. If it is, it generates a new token
+        by calling the auth_aad method with False parameter.
+
+        Returns:
+            str: A valid Azure Active Directory authentication token.
+
+        Notes:
+            - Manages token expiration to ensure a valid token is always returned.
+            - Uses auth_aad(False) to refresh the AAD token when expired.
+        """
         if datetime.datetime.now()>= self.aad_token_expiry:
             self.auth_aad(False)
         return self.token
 
     def auth_aws_dbx(self):
+        """
+        Authenticate with Databricks on AWS and obtain an access token.
+
+        This method performs authentication for Databricks workspaces hosted on AWS. It uses
+        the account ID, user ID, and password stored in the dbx_config to obtain an access token.
+
+        Notes:
+            - Uses HTTP Basic Authentication with the AWS user ID and password.
+            - Requests a token with 'all-apis' scope.
+            - Updates self.token_dbx with the new access token.
+            - Sets self.dbx_token_expiry based on the token's expiration time (with a 30-second buffer).
+            - Raises an exception if the authentication request fails.
+
+        Raises:
+            requests.exceptions.HTTPError: If the authentication request fails.
+        """
         url = f"https://accounts.cloud.databricks.com/oidc/accounts/{self.dbx_config['account_id']}/v1/token"
     
         auth=HTTPBasicAuth(self.dbx_config['aws_user_id'], self.dbx_config['aws_password'])
@@ -112,6 +225,22 @@ class scim_integrator():
             
 
     def get_spn_details(self, service_principals):
+        """
+            Retrieve detailed information about service principals from Azure AD.
+
+            This function makes Graph API calls to get detailed information for each service principal
+            provided in the input DataFrame.
+
+            Args:
+                service_principals (pd.DataFrame): DataFrame containing service principal IDs.
+
+            Returns:
+                pd.DataFrame: DataFrame with detailed information about the service principals.
+
+            Notes:
+                - Uses the make_graph_get_call method for API requests.
+                - Concatenates results for multiple service principals into a single DataFrame.
+            """
         spns_df = pd.DataFrame()
         for idx, spn in service_principals.iterrows():
             url = f'https://graph.microsoft.com/v1.0/servicePrincipals/{spn["id"]}'
@@ -125,6 +254,24 @@ class scim_integrator():
 
     @lru_cache(maxsize=256, typed=True)
     def get_all_groups_aad(self,with_members = False):
+        """
+        Retrieve all groups from Azure AD based on the groups_to_sync list.
+
+        This function fetches group information from Azure AD, optionally including member details.
+        It uses batch processing and multi-threading for improved performance.
+
+        Args:
+            with_members (bool, optional): If True, include member details for each group. Defaults to False.
+
+        Returns:
+            pd.DataFrame: DataFrame containing group information and optionally member details.
+
+        Notes:
+            - Uses caching to improve performance for repeated calls.
+            - Implements multi-threading for parallel processing of API calls.
+            - Handles pagination for large result sets.
+            - Supports both user and service principal group members.
+        """
         batch_size = 10
         split_count = round(len(self.groups_to_sync)/batch_size,0)
         groups_to_sync_split = []
@@ -178,7 +325,25 @@ class scim_integrator():
         return user_groups_df
     
     def get_all_groups_nested_aad(self, parent_groups):
-        
+        """
+        Retrieve nested group information from Azure Active Directory for given parent groups.
+
+        This function fetches detailed information about the specified parent groups and their nested subgroups
+        from Azure AD. It uses batch processing and multi-threading for improved performance.
+
+        Args:
+            parent_groups (list): List of parent group names to fetch nested group information for.
+
+        Returns:
+            pd.DataFrame: DataFrame containing nested group information, or None if no groups are found.
+
+        Notes:
+            - Implements batching to handle large numbers of parent groups efficiently.
+            - Uses multi-threading to make concurrent API calls, improving performance.
+            - Respects the account_get_resource_limit from dbx_config for concurrency control.
+            - Fetches both group details and their member groups.
+            - Concatenates results into a single DataFrame with group hierarchy information.
+        """
         batch_size = 10
         split_count = round(len(parent_groups)/batch_size,0)
         groups_to_sync_split = []
@@ -230,11 +395,37 @@ class scim_integrator():
         else:
             return None
     def dump_json(self, new_groups_to_sync, path):
+        """
+        Write a list of groups to a JSON file.
 
+        This function takes a list of group names and writes them to a JSON file at the specified path.
+
+        Args:
+            new_groups_to_sync (list): List of group names to be written to the JSON file.
+            path (str): File path where the JSON file will be created or overwritten.
+
+        Notes:
+            - Uses json.dump with indentation for better readability of the output file.
+            - Ensures proper encoding of non-ASCII characters.
+        """
         with open(path, 'w') as outfile:
             json.dump(new_groups_to_sync, outfile, ensure_ascii=False, indent=4)     
     
     def populate_groups_to_sync(self, path):
+        """
+        Populate and update the groups_to_sync list with nested groups.
+
+        This function recursively fetches nested groups starting from the initial groups_to_sync list,
+        and updates the list with all discovered nested groups. The final list is then saved to a JSON file.
+
+        Args:
+            path (str): File path where the updated groups_to_sync list will be saved as a JSON file.
+
+        Notes:
+            - Iteratively fetches nested groups until no new groups are discovered.
+            - Updates the groups_to_sync list with newly discovered groups in each iteration.
+            - Saves the final, comprehensive list of groups to the specified JSON file.
+        """
         iter_groups_to_sync = self.groups_to_sync
         all_groups = self.get_all_groups_nested_aad(iter_groups_to_sync)
 
@@ -247,6 +438,22 @@ class scim_integrator():
         self.dump_json(iter_groups_to_sync, path)
 
     def get_all_groups_aad_member_count(self):
+        """
+        Retrieve all groups from Azure AD along with their member counts.
+
+        This function fetches information about all groups in Azure AD and calculates
+        the number of members for each group.
+
+        Returns:
+            pd.DataFrame: DataFrame containing group information including id, displayName, and member_count.
+
+        Notes:
+            - Uses the Graph API to fetch group information and member counts.
+            - Implements pagination to handle large numbers of groups.
+            - Calculates the total member count across all groups.
+            - The commented-out condition (if total_count >= 20000) suggests a potential limit
+            that could be implemented to stop processing after reaching a certain member count.
+        """
         params = {'$select':'id, displayName'}
         threads = []
         url = 'https://graph.microsoft.com/v1.0/groups'
@@ -274,6 +481,18 @@ class scim_integrator():
 
     @lru_cache(maxsize=256, typed=True)
     def get_all_users_aad(self):
+        """
+        Retrieve all users from Azure AD.
+
+        This function fetches user information from Azure AD using the Microsoft Graph API.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user information.
+
+        Notes:
+            - Uses caching to improve performance for repeated calls.
+            - Handles pagination for large result sets.
+        """
         url = 'https://graph.microsoft.com/v1.0/users'
         users = self.make_graph_get_call(url, pagination=True)
         users_json = json.dumps(users)
@@ -284,6 +503,24 @@ class scim_integrator():
         return users_df
     
     def get_users_by_username_aad(self,usernames):
+        """
+        Retrieve user information from Azure AD for a list of usernames.
+
+        This function fetches user details from Azure AD based on the provided list of usernames (userPrincipalNames).
+        It uses batch processing and multi-threading for improved performance when dealing with a large number of users.
+
+        Args:
+            usernames (list): List of userPrincipalNames to fetch user information for.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user information (id and userPrincipalName) for the specified usernames.
+
+        Notes:
+            - Implements batching to handle large numbers of usernames efficiently.
+            - Uses multi-threading to make concurrent API calls, improving performance.
+            - Respects the account_get_resource_limit from dbx_config for concurrency control.
+            - Concatenates results from multiple API calls into a single DataFrame.
+        """
         batch_size = 10
         split_count = round(len(usernames)/batch_size,0)
         usernames_split = []
@@ -311,6 +548,24 @@ class scim_integrator():
         return master_list
     
     def get_apps_by_displayName_aad(self,displayName):
+        """
+        Retrieve application information from Azure AD for a list of display names.
+
+        This function fetches application details from Azure AD based on the provided list of display names.
+        It uses batch processing and multi-threading for improved performance when dealing with a large number of applications.
+
+        Args:
+            displayName (list): List of application display names to fetch information for.
+
+        Returns:
+            pd.DataFrame: DataFrame containing application information (appId and displayName) for the specified display names.
+
+        Notes:
+            - Implements batching to handle large numbers of display names efficiently.
+            - Uses multi-threading to make concurrent API calls, improving performance.
+            - Respects the account_get_resource_limit from dbx_config for concurrency control.
+            - Concatenates results from multiple API calls into a single DataFrame.
+        """
         batch_size = 10
         split_count = round(len(displayName)/batch_size,0)
         displayName_split = []
@@ -337,6 +592,19 @@ class scim_integrator():
         return master_list
 
     def get_delete_users_aad(self):
+        """
+        Retrieve deleted users from Azure AD.
+
+        This function fetches information about recently deleted users from Azure AD 
+        using the Microsoft Graph API.
+
+        Returns:
+            pd.DataFrame: DataFrame containing information about deleted users.
+
+        Notes:
+            - Handles pagination for large result sets.
+            - Cleans up the userPrincipalName for deleted users by removing appended IDs.
+        """
         url = "https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$count=true&$orderby=deletedDateTime asc&$select=id,DisplayName,userPrincipalName,deletedDateTime"
         headers = {'ConsistencyLevel': 'eventual'}
         deleted_users = self.make_graph_get_call(url, pagination=True, headers_in = headers)
@@ -351,6 +619,25 @@ class scim_integrator():
 
 
     def get_user_details_dbx(self,ids_string):
+        """
+        Retrieve user details from Databricks using SCIM API.
+
+        This function fetches user information from Databricks for the given user IDs.
+        It supports the scalable SCIM API, allowing retrieval of up to 50,000 users.
+
+        Args:
+            ids_string (str): A string of user IDs to fetch, formatted for SCIM filter.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user details from Databricks.
+
+        Raises:
+            Exception: If the API call fails, logs the error and re-raises the exception.
+
+        Notes:
+            - Handles both regular users and service principals.
+            - Includes admin status in the returned data.
+        """
         try:
             account_id = self.dbx_config["account_id"] 
             token_result = self.get_dbx_token()
@@ -403,6 +690,24 @@ class scim_integrator():
             raise
 
     def get_spn_details_dbx(self,ids_string):
+        """
+        Retrieve service principal details from Databricks using SCIM API.
+
+        This function fetches service principal information from Databricks for the given IDs.
+        It supports the scalable SCIM API, allowing retrieval of up to 50,000 service principals.
+
+        Args:
+            ids_string (str): A string of service principal IDs to fetch, formatted for SCIM filter.
+
+        Returns:
+            pd.DataFrame: DataFrame containing service principal details from Databricks.
+
+        Raises:
+            Exception: If the API call fails, logs the error and re-raises the exception.
+
+        Notes:
+            - Similar structure to get_user_details_dbx, but specific to service principals.
+        """
         try:
             account_id = self.dbx_config["account_id"] 
             token_result = self.get_dbx_token()
@@ -448,6 +753,21 @@ class scim_integrator():
             self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
             raise
     def get_all_user_groups_dbx(self, all_groups = False):
+        """
+        Retrieve all user groups and their members from Databricks using SCIM API.
+
+        This function fetches information about all groups and their members (users, service principals, and nested groups)
+        from Databricks. It supports the scalable SCIM API and handles pagination for large datasets.
+
+        Returns:
+            pd.DataFrame: DataFrame containing group and member information.
+
+        Notes:
+            - Implements batching and pagination to handle large numbers of groups.
+            - Processes users, service principals, and nested groups separately.
+            - Uses multi-threading for parallel processing of API calls.
+            - Implements retry mechanism for failed API calls.
+        """
         try:
             batch_size = 9
             group_ids = []
@@ -567,6 +887,29 @@ class scim_integrator():
             self.logger_obj.error(f"Exception {X}")
 
     def extract_group_members(self,resource_items):
+        """
+        Extract member information from group results in a scalable manner.
+
+        This function processes graph results containing group information, retrieves detailed
+        group information for each group, and extracts member details. It's designed to handle
+        large numbers of groups efficiently using multi-threading.
+
+        Args:
+            graph_results (list): List of graph result items containing group information.
+
+        Returns:
+            tuple: A tuple containing:
+                - pd.DataFrame: DataFrame with group and member information.
+                - list: List of user IDs.
+                - list: List of service principal IDs.
+                - list: List of nested group IDs.
+
+        Notes:
+            - Uses multi-threading to fetch group details concurrently.
+            - Respects the account_get_resource_limit from dbx_config for concurrency control.
+            - Calls extract_group_members to process the detailed group information.
+            - Suitable for processing large numbers of groups efficiently.
+        """
         counter = 0
         ids = []
         
@@ -607,6 +950,29 @@ class scim_integrator():
         return groups_df,user_ids,spn_ids,group_ids
     
     def extract_group_members_scalable(self, graph_results):
+        """
+        Extract member information from group results in a scalable manner : For Scalable SCIM APIs.
+
+        This function processes graph results containing group information, retrieves detailed
+        group information for each group, and extracts member details. It's designed to handle
+        large numbers of groups efficiently using multi-threading.
+
+        Args:
+            graph_results (list): List of graph result items containing group information.
+
+        Returns:
+            tuple: A tuple containing:
+                - pd.DataFrame: DataFrame with group and member information.
+                - list: List of user IDs.
+                - list: List of service principal IDs.
+                - list: List of nested group IDs.
+
+        Notes:
+            - Uses multi-threading to fetch group details concurrently.
+            - Respects the account_get_resource_limit from dbx_config for concurrency control.
+            - Calls extract_group_members to process the detailed group information.
+            - Suitable for processing large numbers of groups efficiently.
+        """
         counter = 0
         group_ids = []
         ids = []
@@ -637,6 +1003,26 @@ class scim_integrator():
         return groups_df,user_ids, spn_ids,group_ids
 
     def get_group_details_with_id(self, group_id):
+        """
+        Retrieve detailed information for a specific group from Databricks.
+
+        This function fetches detailed information for a given group ID from Databricks
+        using the SCIM API. It implements retry logic for rate limiting.
+
+        Args:
+            group_id (str): The ID of the group to fetch details for.
+
+        Returns:
+            list: A list containing the JSON response with group details.
+
+        Raises:
+            Exception: If there's an error in fetching group details, it logs the error and re-raises.
+
+        Notes:
+            - Uses the Databricks SCIM API to fetch group details.
+            - Implements retry logic with a 1-second delay for rate limit (429) responses.
+            - Utilizes get_dbx_token to ensure a valid authentication token is used.
+        """
         try:
             graph_results = []
             token_result = self.get_dbx_token()
@@ -656,6 +1042,23 @@ class scim_integrator():
                     self.logger_obj.error(f"Getting Groups Details with Ids Failed")
                     raise
     def get_users_with_ids_dbx(self,ids):
+        """
+        Retrieve user details from Databricks for a list of user IDs.
+
+        This function fetches user information from Databricks for the given list of user IDs.
+        It supports batch processing to handle large numbers of users efficiently.
+
+        Args:
+            ids (list): List of user IDs to fetch from Databricks.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user details for the given IDs.
+
+        Notes:
+            - Implements batching to handle large numbers of user IDs.
+            - Uses the get_user_details_dbx method for actual API calls.
+            - Handles potential errors for each batch separately.
+        """
         try:
             batch_size = 100
             account_id = self.dbx_config["account_id"]
@@ -694,6 +1097,24 @@ class scim_integrator():
             self.logger_obj.error(f"Getting User Details with Ids Failed")
             raise
     def get_user_details_with_userName_dbx(self,nameString):
+        """
+        Retrieve user details from Databricks for a specific username.
+
+        This function fetches user information from Databricks for the given username.
+
+        Args:
+            nameString (str): Username to search for in Databricks.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user details for the given username.
+
+        Raises:
+            Exception: If the API call fails, logs the error and re-raises the exception.
+
+        Notes:
+            - Similar to get_user_details_dbx, but filters by username instead of ID.
+            - Includes admin status in the returned data.
+        """
         try:
             account_id = self.dbx_config["account_id"] 
             token_result = self.get_dbx_token()
@@ -743,6 +1164,23 @@ class scim_integrator():
             self.logger_obj.error(f"Fetching User Details Failed with status : {req.status_code} and reason :{req.reason}")
             raise
     def get_spn_details_with_appDisplayName_dbx(self,appDislayName):
+        """
+        Retrieve service principal details from Databricks for a specific application display name.
+
+        This function fetches service principal information from Databricks for the given application display name.
+
+        Args:
+            appDisplayName (str): Application display name to search for in Databricks.
+
+        Returns:
+            pd.DataFrame: DataFrame containing service principal details for the given application display name.
+
+        Raises:
+            Exception: If the API call fails, logs the error and re-raises the exception.
+
+        Notes:
+            - Similar to get_spn_details_dbx, but filters by application display name instead of ID.
+        """
         try:
             account_id = self.dbx_config["account_id"] 
             token_result = self.get_dbx_token()
@@ -796,6 +1234,23 @@ class scim_integrator():
             raise
 
     def get_spns_with_ids_dbx(self,ids):
+        """
+        Retrieve service principal details from Databricks for a list of service principal IDs.
+
+        This function fetches service principal information from Databricks for the given list of IDs.
+        It supports batch processing to handle large numbers of service principals efficiently.
+
+        Args:
+            ids (list): List of service principal IDs to fetch from Databricks.
+
+        Returns:
+            pd.DataFrame: DataFrame containing service principal details for the given IDs.
+
+        Notes:
+            - Implements batching to handle large numbers of service principal IDs.
+            - Uses the get_spn_details_dbx method for actual API calls.
+            - Handles potential errors for each batch separately.
+        """
         try:
             batch_size = 100
             account_id = self.dbx_config["account_id"]
@@ -836,6 +1291,20 @@ class scim_integrator():
             raise
 
     def get_all_groups_dbx(self):
+        """
+        Retrieve all groups from Databricks using SCIM API.
+
+        This function fetches information about all groups from Databricks. 
+        It supports pagination to handle large numbers of groups.
+
+        Returns:
+            pd.DataFrame: DataFrame containing group information from Databricks.
+
+        Notes:
+            - Implements pagination to handle large numbers of groups.
+            - Uses retry mechanism for failed API calls.
+            - Includes group entitlements if available.
+        """
         try:
             account_id = self.dbx_config["account_id"]
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
@@ -888,6 +1357,20 @@ class scim_integrator():
             self.logger_obj.error(f"Getting All Group Details Failed")
             raise
     def get_all_admins_dbx(self):
+        """
+        Retrieve all admin users from Databricks using SCIM API.
+
+        This function fetches information about all users with admin roles from Databricks.
+        It supports pagination to handle large numbers of admin users.
+
+        Returns:
+            pd.DataFrame: DataFrame containing admin user information from Databricks.
+
+        Notes:
+            - Implements pagination to handle large numbers of admin users.
+            - Uses retry mechanism for failed API calls.
+            - Filters users based on the 'account_admin' role.
+        """
         account_id = self.dbx_config["account_id"]
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
@@ -943,6 +1426,20 @@ class scim_integrator():
         return df
     
     def get_workspaces_list(self):
+        """
+        Retrieve a list of Databricks workspaces and their permissions.
+
+        This function fetches information about all workspaces in the Databricks account
+        and attempts to retrieve user permissions for each workspace.
+
+        Returns:
+            pd.DataFrame: DataFrame containing workspace information and permissions.
+
+        Notes:
+            - Requires workspace-level authentication for each workspace.
+            - Fetches user entitlements for each workspace.
+            - May encounter permission issues for workspaces where the service principal lacks access.
+        """
         account_id = self.dbx_config["account_id"]
                     # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/workspaces"  
@@ -971,6 +1468,20 @@ class scim_integrator():
         return df
         
     def get_all_users_dbx(self):
+        """
+        Retrieve all users from Databricks using SCIM API.
+
+        This function fetches information about all users from Databricks.
+        It supports pagination to handle large numbers of users.
+
+        Returns:
+            pd.DataFrame: DataFrame containing user information from Databricks.
+
+        Notes:
+            - Implements pagination to handle large numbers of users.
+            - Uses retry mechanism for failed API calls.
+            - Includes active status for each user.
+        """
         try:
         
 
@@ -1018,6 +1529,26 @@ class scim_integrator():
             raise
 
     def get_all_users_call_api(self,index, itemsPerPage):
+        """
+        Make an API call to retrieve user information from Databricks.
+
+        This function fetches a page of user information from Databricks using the SCIM API.
+        It supports pagination and implements retry logic for improved reliability.
+
+        Args:
+            index (int): The starting index for the user list to retrieve.
+            itemsPerPage (int): The number of items to retrieve per page.
+
+        Returns:
+            dict: JSON response containing user information for the requested page.
+                Returns an empty JSON object if all retries fail.
+
+        Notes:
+            - Uses the Databricks SCIM API to fetch user details.
+            - Implements retry logic with up to 3 attempts in case of failure.
+            - Utilizes get_dbx_token to ensure a valid authentication token is used.
+            - Logs errors and retry attempts for debugging purposes.
+        """
         account_id = self.dbx_config["account_id"] 
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
         
@@ -1044,6 +1575,26 @@ class scim_integrator():
                     break
         return json.dumps({})
     def get_all_spns_dbx(self):
+        """
+        Retrieve all service principals from Databricks.
+
+        This function fetches information about all service principals in Databricks using the SCIM API.
+        It handles pagination to retrieve all service principals and implements retry logic for reliability.
+
+        Returns:
+            pd.DataFrame: DataFrame containing service principal information including id, applicationId, 
+                        displayName, externalId, and active status.
+
+        Raises:
+            Exception: If there's an error in fetching service principal details, it logs the error and re-raises.
+
+        Notes:
+            - Uses the Databricks SCIM API to fetch service principal details.
+            - Implements pagination to handle large numbers of service principals.
+            - Uses retry logic with up to 3 attempts for each API call.
+            - Utilizes get_dbx_token to ensure a valid authentication token is used.
+            - Processes the JSON response and converts it into a pandas DataFrame for easy manipulation.
+        """
         try:
             account_id = self.dbx_config["account_id"]
             # url = dbx_config['dbx_host'] + "/api/2.0/preview/scim/v2/Groups"
@@ -1107,6 +1658,23 @@ class scim_integrator():
 
     @log_decorator.log_decorator()
     def create_group_dbx(self,displayName,externalId):
+        """
+        Create a new group in Databricks using SCIM API.
+
+        This function creates a new group in Databricks with the given display name and external ID.
+
+        Args:
+            displayName (str): The display name for the new group.
+            externalId (str): The external ID for the new group (typically the Azure AD group ID).
+
+        Returns:
+            pd.DataFrame: DataFrame containing the details of the newly created group.
+
+        Notes:
+            - Uses retry mechanism for failed API calls.
+            - Logs the creation process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         try:
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups"
@@ -1168,7 +1736,23 @@ class scim_integrator():
     # @sleep_and_retry                
     # @limits(calls= 7, period=1)               
     def create_users_request(self, userName,displayName,externalId):
-        
+        """
+        Create a new user in Databricks using SCIM API.
+
+        This function creates a new user in Databricks with the given username, display name, and external ID.
+
+        Args:
+            userName (str): The username for the new user.
+            displayName (str): The display name for the new user.
+            externalId (str): The external ID for the new user (typically the Azure AD user ID).
+
+        Returns:
+            int: The HTTP status code of the create operation.
+
+        Notes:
+            - Uses retry mechanism for failed API calls.
+            - Logs the creation process and any errors encountered.
+        """
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Users"
         token_result = self.get_dbx_token()
@@ -1199,6 +1783,24 @@ class scim_integrator():
     @sleep_and_retry
     @limits(calls=7, period=1)      
     def create_spns_request(self, applicationId,displayName,externalId):
+        """
+        Create a new service principal in Databricks using SCIM API.
+
+        This function creates a new service principal in Databricks with the given application ID, display name, and external ID.
+
+        Args:
+            applicationId (str): The application ID for the new service principal.
+            displayName (str): The display name for the new service principal.
+            externalId (str): The external ID for the new service principal (typically the Azure AD service principal ID).
+
+        Returns:
+            int: The HTTP status code of the create operation.
+
+        Notes:
+            - Implements rate limiting (7 calls per second).
+            - Uses retry mechanism for failed API calls.
+            - Logs the creation process and any errors encountered.
+        """
         account_id = self.dbx_config["account_id"]
         url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/ServicePrincipals"
         token_result = self.get_dbx_token()
@@ -1252,6 +1854,22 @@ class scim_integrator():
 
     @log_decorator.log_decorator()
     def create_users_dbx(self,users_to_add):
+        """
+        Create multiple users in Databricks using SCIM API.
+
+        This function creates multiple users in Databricks based on the provided DataFrame of user information.
+
+        Args:
+            users_to_add (pd.DataFrame): DataFrame containing user information to be added to Databricks.
+
+        Returns:
+            list: A list of HTTP status codes for each user creation operation.
+
+        Notes:
+            - Uses multi-threading to process multiple user creations concurrently.
+            - Calls create_users_request for each individual user creation.
+            - Decorated with log_decorator for additional logging.
+        """
         ret_df = pd.DataFrame()
         threads= []
         results = []
@@ -1269,6 +1887,22 @@ class scim_integrator():
 
     @log_decorator.log_decorator()
     def create_spns_dbx(self,spns_to_add):
+        """
+        Create multiple service principals in Databricks using SCIM API.
+
+        This function creates multiple service principals in Databricks based on the provided DataFrame of service principal information.
+
+        Args:
+            spns_to_add (pd.DataFrame): DataFrame containing service principal information to be added to Databricks.
+
+        Returns:
+            list: A list of HTTP status codes for each service principal creation operation.
+
+        Notes:
+            - Uses multi-threading to process multiple service principal creations concurrently.
+            - Calls create_spns_request for each individual service principal creation.
+            - Decorated with log_decorator for additional logging.
+        """
         ret_df = pd.DataFrame()
         threads= []
         results = []
@@ -1286,6 +1920,20 @@ class scim_integrator():
         # return ret_df
     @log_decorator.log_decorator()    
     def deactivate_users_dbx(self,users_to_remove):
+        """
+        Deactivate multiple users in Databricks using SCIM API.
+
+        This function deactivates multiple users in Databricks based on the provided DataFrame of user information.
+
+        Args:
+            users_to_remove (pd.DataFrame): DataFrame containing user information to be deactivated in Databricks.
+
+        Notes:
+            - Uses PATCH request to update user status to inactive.
+            - Implements retry mechanism for failed API calls.
+            - Logs the deactivation process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         token_result = self.get_dbx_token()
         headers = {'Authorization': 'Bearer ' + token_result }
         payload = {
@@ -1325,6 +1973,20 @@ class scim_integrator():
 
     @log_decorator.log_decorator()    
     def deactivate_spns_dbx(self,spns_to_remove):
+        """
+        Deactivate multiple service principals in Databricks using SCIM API.
+
+        This function deactivates multiple service principals in Databricks based on the provided DataFrame of service principal information.
+
+        Args:
+            spns_to_remove (pd.DataFrame): DataFrame containing service principal information to be deactivated in Databricks.
+
+        Notes:
+            - Uses PATCH request to update service principal status to inactive.
+            - Implements retry mechanism for failed API calls.
+            - Logs the deactivation process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         for idx, row in spns_to_remove.iterrows():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
@@ -1361,6 +2023,20 @@ class scim_integrator():
                         break
     @log_decorator.log_decorator()
     def activate_users_dbx(self,users_to_activate):
+        """
+        Activate multiple users in Databricks using SCIM API.
+
+        This function activates multiple users in Databricks based on the provided DataFrame of user information.
+
+        Args:
+            users_to_activate (pd.DataFrame): DataFrame containing user information to be activated in Databricks.
+
+        Notes:
+            - Uses PATCH request to update user status to active.
+            - Implements retry mechanism for failed API calls.
+            - Logs the activation process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         for idx, row in users_to_activate.iterrows():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
@@ -1395,6 +2071,20 @@ class scim_integrator():
                         break
     @log_decorator.log_decorator()
     def activate_spns_dbx(self,spns_to_activate):
+        """
+        Activate multiple service principals in Databricks using SCIM API.
+
+        This function activates multiple service principals in Databricks based on the provided DataFrame of service principal information.
+
+        Args:
+            spns_to_activate (pd.DataFrame): DataFrame containing service principal information to be activated in Databricks.
+
+        Notes:
+            - Uses PATCH request to update service principal status to active.
+            - Implements retry mechanism for failed API calls.
+            - Logs the activation process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         for idx, row in spns_to_activate.iterrows():
             id = row['id_y']
             account_id = self.dbx_config["account_id"]
@@ -1429,7 +2119,23 @@ class scim_integrator():
                         self.logger_obj.error(f"Activating SPN Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed : Continuing")
                         break
     def sync_groups(self):
+        """
+        Synchronize groups between Azure AD and Databricks.
 
+        This function compares groups in Azure AD with those in Databricks and performs the following actions:
+        1. Adds missing groups to Databricks.
+        2. Identifies groups that could potentially be deleted from Databricks (but doesn't delete them).
+
+        Returns:
+            tuple: A tuple containing:
+                - DataFrame of created groups (if not in dry run mode)
+                - List of results from group deletion operations (if not in dry run mode)
+
+        Notes:
+            - Uses pandas merge to identify differences between Azure AD and Databricks groups.
+            - Respects the is_dryrun flag to simulate or perform actual changes.
+            - Logs the synchronization process and results.
+        """
         groups_df_dbx = self.get_all_groups_dbx()
         groups_df_aad = self.get_all_groups_aad(False)
 
@@ -1466,6 +2172,23 @@ class scim_integrator():
 
             return created_df,ret_res
     def sync_users(self):
+        """
+        Synchronize users and service principals between Azure AD and Databricks.
+
+        This function compares users and service principals in Azure AD with those in Databricks and performs the following actions:
+        1. Adds missing users and service principals to Databricks.
+        2. Deactivates users and service principals in Databricks that are not present in Azure AD.
+        3. Activates users and service principals in Databricks that were previously deactivated but are present in Azure AD.
+
+        Returns:
+            list: A list of results from user and service principal creation operations (if not in dry run mode).
+
+        Notes:
+            - Uses pandas merge to identify differences between Azure AD and Databricks entities.
+            - Handles both users and service principals separately.
+            - Respects the is_dryrun flag to simulate or perform actual changes.
+            - Logs the synchronization process and results.
+        """
         users_df_dbx = self.get_all_user_groups_dbx()
         spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
         users_df_dbx = users_df_dbx[users_df_dbx['applicationId'].isna()]
@@ -1545,6 +2268,21 @@ class scim_integrator():
         
     @log_decorator.log_decorator()
     def remove_dbx_group_mappings(self,mappings_to_remove):
+        """
+        Remove group memberships in Databricks.
+
+        This function removes users from groups in Databricks based on the provided DataFrame of mappings to remove.
+
+        Args:
+            mappings_to_remove (pd.DataFrame): DataFrame containing group-user mappings to be removed in Databricks.
+
+        Notes:
+            - Groups mappings by group ID for efficient processing.
+            - Uses PATCH request to remove members from groups.
+            - Implements retry mechanism for failed API calls.
+            - Logs the removal process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         operation_set = {}
         unique_groups = mappings_to_remove['group_id_y'].drop_duplicates()
         for g_idx,group_id in unique_groups.items():
@@ -1598,6 +2336,23 @@ class scim_integrator():
                         break
     @log_decorator.log_decorator()
     def add_dbx_group_mappings(self,mappings_to_add,group_master_df,users_df_dbx):
+        """
+        Add group memberships in Databricks.
+
+        This function adds users to groups in Databricks based on the provided DataFrame of mappings to add.
+
+        Args:
+            mappings_to_add (pd.DataFrame): DataFrame containing group-user mappings to be added in Databricks.
+            group_master_df (pd.DataFrame): DataFrame containing master list of groups in Databricks.
+            users_df_dbx (pd.DataFrame): DataFrame containing user information in Databricks.
+
+        Notes:
+            - Handles users, service principals, and nested groups.
+            - Uses PATCH request to add members to groups.
+            - Implements retry mechanism for failed API calls.
+            - Logs the addition process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         mapping_set = {}
         unique_groups = mappings_to_add[['group_id_x','aad_group_displayName']].drop_duplicates().to_dict(orient = 'records')
         all_users_df = self.get_all_users_dbx()
@@ -1669,6 +2424,21 @@ class scim_integrator():
             # self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
 
     def patch_group_mapping(self,group_id, members):
+        """
+        HTTP patch operation to add group memberships in Databricks.
+
+        This function updates the member list provided in the input into Databricks groups using the group_id.
+
+        Args:
+            group_id (int): Databricks Group ID of the group where members are to be patched into.
+            members (pd.DataFrame): list of members formatted in the Patch API format.
+
+        Notes:
+            - Handles users, service principals, and nested groups.
+            - Uses PATCH request to add members to groups.
+            - Implements retry mechanism for failed API calls.
+            - Logs the addition process and any errors encountered.
+        """
         try:    
             # group_id = next(iter(item_dict))
             # print(item)
@@ -1717,6 +2487,21 @@ class scim_integrator():
     
 
     def get_group_member_mapping_set(self, mappings_to_add, group_master_df, users_df_dbx, group_external_id):
+        """
+        Get all Groups and its members .
+
+        This function identify the groups memberships and prepare dataset in a dictionary format as input for patch request.
+
+        Args:
+            mappings_to_add (pd.DataFrame): DataFrame containing group-user mappings to be added in Databricks.
+            group_master_df (pd.DataFrame): DataFrame containing master list of groups in Databricks.
+            users_df_dbx (pd.DataFrame): DataFrame containing user information in Databricks.
+            group_external_id(str): This is the group id in GUID format referred in Azure AD.
+
+        Notes:
+            - Logs the addition process and any errors encountered.
+            - Decorated with log_decorator for additional logging.
+        """
         members = []
 
         
@@ -1757,6 +2542,19 @@ class scim_integrator():
 
 
     def sync_mappings(self):
+        """
+        Synchronize group memberships between Azure AD and Databricks.
+
+        This function compares group memberships in Azure AD with those in Databricks and performs the following actions:
+        1. Adds missing group memberships to Databricks.
+        2. Removes group memberships from Databricks that are not present in Azure AD.
+
+        Notes:
+            - Handles both users and service principals.
+            - Uses pandas merge to identify differences in group memberships.
+            - Respects the is_dryrun flag to simulate or perform actual changes.
+            - Logs the synchronization process and results.
+        """
         users_df_dbx = self.get_all_user_groups_dbx()
         # lower case for join
         users_df_dbx['userName'] = users_df_dbx['userName'].apply(lambda s:s.lower() if type(s) == str else s)
@@ -1834,6 +2632,18 @@ class scim_integrator():
                 mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
 
     def deactivate_deleted_users(self):
+        """
+        Deactivate users in Databricks that have been deleted from Azure AD.
+
+        This function identifies users that exist in Databricks but have been deleted from Azure AD,
+        and deactivates them in Databricks.
+
+        Notes:
+            - Fetches deleted users from Azure AD and compares with active users in Databricks.
+            - Excludes admin users from deactivation for safety.
+            - Respects the is_dryrun flag to simulate or perform actual changes.
+            - Logs the deactivation process and results.
+        """
         all_users_dbx_df = self.get_all_users_dbx()
         all_spns_dbx_df = self.get_all_spns_dbx()
         unique_usernames_dbx = all_users_dbx_df['userName'].unique()
@@ -1889,6 +2699,19 @@ class scim_integrator():
 
    
     def deactivate_orphan_users(self):
+        """
+        Deactivate orphan users in Databricks.
+
+        This function identifies users that exist in Databricks but are not present in any of the 
+        synced Azure AD groups, and deactivates them in Databricks.
+
+        Notes:
+            - Compares users in Databricks with users in synced Azure AD groups.
+            - Excludes users that belong to groups not in the sync list and account users.
+            - Excludes admin users and groups from deactivation for safety.
+            - Respects the is_dryrun flag to simulate or perform actual changes.
+            - Logs the deactivation process and results.
+        """
         users_df_dbx = self.get_all_user_groups_dbx(True)
         users_df_dbx = users_df_dbx[users_df_dbx['group_displayName']!='account users']
         spns_df_dbx = users_df_dbx[users_df_dbx['applicationId'].notna()]
