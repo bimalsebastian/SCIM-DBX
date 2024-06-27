@@ -47,11 +47,78 @@ deactivate_orphan_users : True
 ```
 ### Major Features
 
-1. The code does not manage account_admins. These Ids have to be managed separately.
-2. A dry run feature exists (highly recommended). Use the flag is_dryrun to enable this. This will give a count of all major changes the utility would do. This include (no of users, groups, spns to be created, activtated and the group membership that needs to be updated
-3. Deacivation of users are explicility commented out in this code to give better control during UC migration
-4. Deactivation of users deleted in Azure are handled through the flag : deactivate_deleted_users
-5. Deactivation of orphan users (i.e. users that dont belong to any groups) are handled through the flag : deactivate_orphan_users
+# Azure AD to Databricks SCIM Integrator
+
+This Python utility facilitates the integration between Azure Active Directory (AAD) and Databricks Account Console using SCIM (System for Cross-domain Identity Management) APIs. It provides robust synchronization of users, groups, and service principals between AAD and Databricks.
+
+## Key Features
+
+### Authentication and Token Management
+- Supports authentication with both Azure AD and Databricks
+- Handles token refresh and expiration for both Azure and Databricks
+- Supports both Azure-hosted and AWS-hosted Databricks workspaces
+
+### Data Retrieval
+- Fetches user, group, and service principal data from Azure AD
+- Retrieves corresponding data from Databricks
+- Supports retrieval of nested groups and their members
+- Implements efficient batch processing and pagination for large datasets
+
+### Synchronization
+- Syncs users, groups, and their mappings between Azure AD and Databricks
+- Handles creation, activation, deactivation, and deletion of entities in Databricks
+- Supports syncing of nested group structures
+
+### SCIM API Integration
+- Utilizes SCIM APIs for identity management operations
+- Supports both standard and scalable SCIM APIs, allowing management of up to 50,000 users
+
+### Performance Optimization
+- Implements multi-threading for concurrent API calls
+- Uses caching mechanisms to reduce redundant API calls
+- Employs batching techniques for efficient processing of large datasets
+
+### Error Handling and Reliability
+- Comprehensive error logging for debugging and monitoring
+- Implements retry mechanisms for failed API calls
+- Rate limiting to prevent API throttling
+
+### Flexibility and Configuration
+- Configurable synchronization options
+- Supports dry run mode for simulating changes without applying them
+- Customizable logging levels and output
+
+### Additional Utilities
+- Functions for analyzing group memberships and user counts
+- Capability to export synchronization data for auditing purposes
+- Tools for managing orphaned users and deleted accounts
+
+## Key Components
+
+1. **User Management**: Create, update, activate, and deactivate users in Databricks based on Azure AD data.
+2. **Group Management**: Sync group structures and memberships, including nested groups.
+3. **Service Principal Handling**: Manage service principals in Databricks, syncing with Azure AD applications.
+4. **Scalability**: Designed to handle large enterprises with thousands of users and complex group structures.
+5. **Cross-Cloud Support**: Functions with both Azure-hosted and AWS-hosted Databricks workspaces.
+6. **Detailed Logging**: Comprehensive logging for auditing and troubleshooting.
+
+## Usage
+
+This utility is designed to be run as a scheduled job to maintain synchronization between Azure AD and Databricks. It can be configured to perform full or incremental syncs based on the organization's needs.
+
+## Requirements
+
+- Python 3.x
+- Required Python packages: requests, pandas, numpy, msal, ratelimit
+
+## Configuration
+
+The tool requires configuration files for Azure AD and Databricks credentials, as well as settings for synchronization behavior. Ensure all necessary configurations are set before running the utility.
+
+## Note
+
+This tool performs critical identity management operations. It is recommended to thoroughly test in a non-production environment before deploying to production. Always ensure you have proper backups and rollback procedures in place.
+
 
 
 ### Other considerations,
