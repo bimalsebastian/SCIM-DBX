@@ -176,10 +176,10 @@ if __name__ == '__main__':
     end = time.time() 
     print('Begining Asycn based sync : Time : ',  end-begin)
 
-    begin = time.time()
-    print('Begining regular sync')
-    call_v1()
-    end = time.time() 
-    print('Begining Asycn based sync : Time : ',  end-begin)
+    # begin = time.time()
+    # print('Begining regular sync')
+    # call_v1()
+    # end = time.time() 
+    # print('Begining Asycn based sync : Time : ',  end-begin)
 
     
