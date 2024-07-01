@@ -2179,12 +2179,12 @@ class SCIMIntegrator:
                 for _, row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
                     user_id = row['id_y']
                     members.append({'value': int(user_id)})
-                operation_set[group_id] = {"op": "remove", "path": "members", "value": members}
+                    operation_set[group_id] = {"op": "remove", "path": "members", "value": members}
             else:
                 for _, row in mappings_to_remove[mappings_to_remove['group_id_y']==group_id].iterrows(): 
                     user_id = row['id_y']
                     members.append({"op": "remove", 'path': f"members.value[value eq {user_id}]"})
-                operation_set[group_id] = members
+                    operation_set[group_id] = members
 
         async def remove_mapping(group_id, operations):
             account_id = self.dbx_config.account_id
@@ -2265,19 +2265,21 @@ class SCIMIntegrator:
             group_data = mappings_to_add_updated[mappings_to_add_updated['group_id'] == group['group_id_x']]
             
             if len(group_master_df[group_master_df['externalId'] == group['group_id_x']]) > 0:
-                group_id = str(group_master_df[group_master_df['externalId'] == group['group_id_x']].iloc[0]['id'])
+                group_id = str(group_master_df[group_master_df['externalId'] == group['group_id_x']].iloc[0]['id'])                
+                ids = list(mappings_to_add_updated[mappings_to_add_updated['group_id']==group['group_id_x']]['id'].dropna())
+                for id in ids:
+                    members.append( {'value':id})
+                mapping_set[group_id] = members
             elif len(group_master_df[group_master_df['displayName'] == group['aad_group_displayName']]) > 0:
                 group_id = str(group_master_df[group_master_df['displayName'] == group['aad_group_displayName']].iloc[0]['id'])
+                ids = list(mappings_to_add_updated[mappings_to_add_updated['aad_group_displayName']==group['aad_group_displayName']]['id'].dropna())
+                for id in ids:
+                    members.append( {'value':id})
+                mapping_set[group_id] = members
             else:
                 self.logger.warning(f"Group not found: {group['aad_group_displayName']}")
                 continue
 
-            for _, row in group_data.iterrows():
-                if pd.notna(row['id']):
-                    members.append({'value': row['id']})
-
-            if members:
-                mapping_set[group_id] = members
 
         async def add_mapping(group_id: str, members: List[Dict[str, str]]):
             account_id = self.dbx_config.account_id
@@ -2332,6 +2334,8 @@ class SCIMIntegrator:
         for idx, row in users_df_aad.iterrows():
             if row['@odata.type'] == '#microsoft.graph.group':
                 users_df_aad.at[idx, 'userPrincipalName'] = str(row['displayName']).lower()
+            elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
+                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['appDisplayName']).lower()
 
         users_df_aad['aad_group_displayName'] = users_df_aad['aad_group_displayName'].apply(lambda s: s.lower() if isinstance(s, str) else s)
         users_df_dbx['group_displayName'] = users_df_dbx['group_displayName'].apply(lambda s: s.lower() if isinstance(s, str) else s)
