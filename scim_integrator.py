@@ -652,9 +652,9 @@ class scim_integrator():
                 if req.status_code == 200:
                     break
                 else:
-                    if retry_counter <=3 :
+                    if retry_counter <=5 :
                         print('Retrying get Users')
-                        time.sleep(1)
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         break
@@ -821,8 +821,8 @@ class scim_integrator():
                                     break
                                 else:
                                     self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                                    if retry_counter <= 3:
-                                        time.sleep(1)
+                                    if retry_counter <= 5:
+                                        time.sleep(2**retry_counter)
                                         retry_counter+=1
                                     else:
                                         self.logger_obj.error(f"Fetching Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1029,11 +1029,14 @@ class scim_integrator():
             headers = {'Authorization': 'Bearer ' + token_result }
             account_id = self.dbx_config["account_id"]
             url = self.dbx_config['dbx_account_host'] + f"/api/2.0/accounts/{account_id}/scim/v2/Groups/{group_id}"
+            retry_counter = 0
             while True:
                 req = requests.get(url=url, headers=headers)
-            
-                if req.status_code == 429:
-                    time.sleep(1) 
+                
+                if req.status_code == 429 and retry_counter<=5:
+                    print(f'Retrying fetch group details for Group:{group_id}')
+                    time.sleep(2**retry_counter)
+                    retry_counter+=1
                 else:
                     graph_results.append(req.json())
                     break
@@ -1127,8 +1130,8 @@ class scim_integrator():
             retry_counter=1
             while True:
                 req = requests.get(url=url, headers=headers, params = params)
-                if req.status_code == 429 and retry_counter<=3:
-                    time.sleep(1)
+                if req.status_code == 429 and retry_counter<=5:
+                    time.sleep(2**retry_counter)
                     retry_counter+=1
                 else:
                     break
@@ -1192,8 +1195,8 @@ class scim_integrator():
             retry_counter=1
             while True:
                 req = requests.get(url=url, headers=headers, params = params)
-                if req.status_code == 429 and retry_counter<=3:
-                    time.sleep(1)
+                if req.status_code == 429 and retry_counter<=5:
+                    time.sleep(2**retry_counter)
                     retry_counter+=1
                 else:
                     break
@@ -1333,8 +1336,8 @@ class scim_integrator():
                         break
                     else:
                         self.logger_obj.error(f"Fetching All Group Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                        if retry_counter <= 3:
-                            time.sleep(1)
+                        if retry_counter <= 5:
+                            time.sleep(2**retry_counter)
                             retry_counter+=1
                         else:
                             self.logger_obj.error(f"Fetching All Group Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1401,8 +1404,8 @@ class scim_integrator():
                     break
                 else:
                     self.logger_obj.error(f"Fetching Admin Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         self.logger_obj.error(f"Fetching Admin Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1567,8 +1570,8 @@ class scim_integrator():
                 return req.json()
             else:
                 self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                if retry_counter <= 3:
-                    time.sleep(1)
+                if retry_counter <= 5:
+                    time.sleep(2**retry_counter)
                     retry_counter+=1
                 else:
                     self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1625,8 +1628,8 @@ class scim_integrator():
                         break
                     else:
                         self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                        if retry_counter <= 3:
-                            time.sleep(1)
+                        if retry_counter <= 4:
+                            time.sleep(2**retry_counter)
                             retry_counter+=1
                         else:
                             self.logger_obj.error(f"Fetching All User Details Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1698,8 +1701,8 @@ class scim_integrator():
                     return df
                 else:
                     self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         self.logger_obj.error(f"Creating User Group Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -1773,8 +1776,8 @@ class scim_integrator():
                 return req.status_code
             else:
                 self.logger_obj.error(f"Failed Creating User. {userName}: Attempting Retry") 
-                if retry_counter <= 3:
-                    time.sleep(1)
+                if retry_counter <= 5:
+                    time.sleep(2**retry_counter)
                     retry_counter+=1
                 else:
                     self.logger_obj.error(f"Failed Creating User. {userName}: Retry failed. Continuing") 
@@ -1823,8 +1826,8 @@ class scim_integrator():
                     
                 else :
                     self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Attempting Retry") 
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Retry Failed. Continuing") 
@@ -1844,8 +1847,8 @@ class scim_integrator():
                     return req.status_code
             else :
                 self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Attempting Retry") 
-                if retry_counter <= 3:
-                    time.sleep(1)
+                if retry_counter <= 5:
+                    time.sleep(2**retry_counter)
                     retry_counter+=1
                 else:
                     self.logger_obj.error(f"Failed Creating Service Principal. {displayName} with application id:{applicationId}: Retry Failed. Continuing") 
@@ -1965,8 +1968,8 @@ class scim_integrator():
                     
                     self.logger_obj.error(f"Failed to deactivate user with dbx_id:{id}") 
                     self.logger_obj.error(f"Deactivating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if (retry_counter <= 3) and (req.reason != 'Not Found'):
-                        time.sleep(1)
+                    if (retry_counter <= 5) and (req.reason != 'Not Found'):
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         break
@@ -2015,8 +2018,8 @@ class scim_integrator():
                 else:
                     self.logger_obj.error(f"Failed to deactivate SPN with dbx_id:{id}") 
                     self.logger_obj.error(f"Deactivating SPN Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         self.logger_obj.error(f"Deactivating SPN Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed. Continuing")
@@ -2064,8 +2067,8 @@ class scim_integrator():
                 else:
                     self.logger_obj.error(f"Failed to activate user with dbx_id:{id}") 
                     self.logger_obj.error(f"Activating User Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         break
@@ -2112,8 +2115,8 @@ class scim_integrator():
                 else:
                     self.logger_obj.error(f"Failed to activate SPN with dbx_id:{id}") 
                     self.logger_obj.error(f"Activating SPN Failed with status : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         self.logger_obj.error(f"Activating SPN Failed with status : {req.status_code} and reason :{req.reason}. Retry Failed : Continuing")
@@ -2329,8 +2332,8 @@ class scim_integrator():
                 else:
                     self.logger_obj.error(f"Group mapping removal failed for items:{item}") 
                     self.logger_obj.error(f"Group mapping removal failed for items : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         break
@@ -2475,8 +2478,8 @@ class scim_integrator():
                 else:
                     self.logger_obj.error(f"Group mapping creation failed for items:{group_id}") 
                     self.logger_obj.error(f"Group mapping creation failed for items : {req.status_code} and reason :{req.reason}. Attempting Retry")
-                    if retry_counter <= 3:
-                        time.sleep(1)
+                    if retry_counter <= 5:
+                        time.sleep(2**retry_counter)
                         retry_counter+=1
                     else:
                         return {'group_id':group_id,'status_code':req.reason}
@@ -2567,12 +2570,20 @@ class scim_integrator():
         users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
         users_df_aad = users_df_aad.reset_index(drop = True)
         # If child groups are present, then the join would fail since userPrincipalNames are Nan. For groups, force the join through displayName
-        for idx,row in users_df_aad.iterrows():
-            if row['@odata.type'] == '#microsoft.graph.group':
-                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['displayName']).lower()
-            elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
-                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['appDisplayName']).lower()
+        # for idx,row in users_df_aad.iterrows():
+        #     if row['@odata.type'] == '#microsoft.graph.group':
+        #         users_df_aad.iloc[idx]['userPrincipalName'] = str(row['displayName']).lower()
+        #     elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
+        #         users_df_aad.iloc[idx]['userPrincipalName'] = str(row['appDisplayName']).lower()
+        # for idx,row in users_df_dbx.iterrows():
+        #     if row['type'] == 'ServicePrincipal':
+        #         users_df_dbx.iloc[idx]['userName'] = str(row['displayName']).lower()
 
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower())
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower())
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'displayName']
+
+        users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'userName'] = users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'displayName'].apply(lambda x: x.lower())
 
         users_df_aad['aad_group_displayName'] = users_df_aad['aad_group_displayName'].apply(lambda s:s.lower() if type(s) == str else s)
 
@@ -2608,28 +2619,28 @@ class scim_integrator():
 
 
         # this check validates if there any spns to be synced
-        if 'appId' in users_df_dbx.columns:
-            net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id','appId'], right_on=['group_externalId','applicationId'], how='outer')
-            net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] =='#microsoft.graph.servicePrincipal']
-            mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
+        # if 'appId' in users_df_dbx.columns:
+        #     net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id','appId'], right_on=['group_externalId','applicationId'], how='outer')
+        #     net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] =='#microsoft.graph.servicePrincipal']
+        #     mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
             
-            mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
-            mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
-            if self.is_dryrun:
-                print('This is a dry run')
-                print(" Total Mappings for SPN's to be removed :")
-                mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
-                mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
-            mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()   
-            print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
-            print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
+        #     mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
+        #     mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
+        #     if self.is_dryrun:
+        #         print('This is a dry run')
+        #         print(" Total Mappings for SPN's to be removed :")
+        #         mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+        #         mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
+        #     mappings_to_remove_spns = mappings_to_remove_spns[['id_y','group_id_y']].drop_duplicates()   
+        #     print(" Total New Mappings for SPNs:" + str(mappings_to_add_spns.shape[0]))
+        #     print(" Total Mappings for SPNs to be removed :" + str(mappings_to_remove_spns.shape[0])) 
 
-            if not self.is_dryrun:
-                self.remove_dbx_group_mappings(mappings_to_remove_spns)
+        #     if not self.is_dryrun:
+        #         self.remove_dbx_group_mappings(mappings_to_remove_spns)
                 
-                self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
-                mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
-                mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
+        #         self.add_dbx_group_mappings(mappings_to_add_spns,group_master_df,users_df_dbx)
+        #         mappings_to_remove_spns.to_csv(self.log_file_dir + 'mappings_to_remove_SPNs.csv')
+        #         mappings_to_add_spns.to_csv(self.log_file_dir + 'mappings_to_add_SPNs.csv')
 
     def deactivate_deleted_users(self):
         """
