@@ -2331,11 +2331,14 @@ class SCIMIntegrator:
 
         users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s: s.lower() if isinstance(s, str) else s)
         users_df_aad = users_df_aad.reset_index(drop=True)
-        for idx, row in users_df_aad.iterrows():
-            if row['@odata.type'] == '#microsoft.graph.group':
-                users_df_aad.at[idx, 'userPrincipalName'] = str(row['displayName']).lower()
-            elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
-                users_df_aad.iloc[idx]['userPrincipalName'] = str(row['appDisplayName']).lower()
+
+        
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower())
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower())
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'displayName']
+
+        
+        users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'userName'] = users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'displayName'].apply(lambda x: x.lower())
 
         users_df_aad['aad_group_displayName'] = users_df_aad['aad_group_displayName'].apply(lambda s: s.lower() if isinstance(s, str) else s)
         users_df_dbx['group_displayName'] = users_df_dbx['group_displayName'].apply(lambda s: s.lower() if isinstance(s, str) else s)
@@ -2363,28 +2366,28 @@ class SCIMIntegrator:
             await self.remove_dbx_group_mappings(mappings_to_remove)
             await self.add_dbx_group_mappings(mappings_to_add, group_master_df, users_df_dbx)
 
-        if 'appId' in users_df_dbx.columns:
-            net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id', 'appId'], 
-                                                right_on=['group_externalId', 'applicationId'], how='outer')
-            net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] == '#microsoft.graph.servicePrincipal']
-            mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
+        # if 'appId' in users_df_dbx.columns:
+        #     net_delta_spns = users_df_aad.merge(users_df_dbx, left_on=['group_id', 'appId'], 
+        #                                         right_on=['group_externalId', 'applicationId'], how='outer')
+        #     net_delta_spns = net_delta_spns[net_delta_spns['@odata.type'] == '#microsoft.graph.servicePrincipal']
+        #     mappings_to_add_spns = net_delta_spns[(net_delta_spns['id_x'].notna()) & (net_delta_spns['id_y'].isna())]
             
-            mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
-            mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
-            if self.is_dryrun:
-                print('This is a dry run')
-                print(" Total Mappings for SPN's to be removed:")
-                mappings_to_remove_spns.to_csv(f"{self.log_file_dir}mappings_to_remove_SPNs.csv")
-                mappings_to_add_spns.to_csv(f"{self.log_file_dir}mappings_to_add_SPNs.csv")
-            mappings_to_remove_spns = mappings_to_remove_spns[['id_y', 'group_id_y']].drop_duplicates()   
-            print(f" Total New Mappings for SPNs: {mappings_to_add_spns.shape[0]}")
-            print(f" Total Mappings for SPNs to be removed: {mappings_to_remove_spns.shape[0]}") 
+        #     mappings_to_remove_spns = net_delta_spns[(net_delta_spns['id_x'].isna()) & (net_delta_spns['id_y'].notna()) & (net_delta_spns['group_externalId'].notna())]
+        #     mappings_to_remove_spns = mappings_to_remove_spns[mappings_to_remove_spns['group_displayName'].isin(self.groups_to_sync)]
+        #     if self.is_dryrun:
+        #         print('This is a dry run')
+        #         print(" Total Mappings for SPN's to be removed:")
+        #         mappings_to_remove_spns.to_csv(f"{self.log_file_dir}mappings_to_remove_SPNs.csv")
+        #         mappings_to_add_spns.to_csv(f"{self.log_file_dir}mappings_to_add_SPNs.csv")
+        #     mappings_to_remove_spns = mappings_to_remove_spns[['id_y', 'group_id_y']].drop_duplicates()   
+        #     print(f" Total New Mappings for SPNs: {mappings_to_add_spns.shape[0]}")
+        #     print(f" Total Mappings for SPNs to be removed: {mappings_to_remove_spns.shape[0]}") 
 
-            if not self.is_dryrun:
-                await self.remove_dbx_group_mappings(mappings_to_remove_spns)
-                await self.add_dbx_group_mappings(mappings_to_add_spns, group_master_df, users_df_dbx)
-                mappings_to_remove_spns.to_csv(f"{self.log_file_dir}mappings_to_remove_SPNs.csv")
-                mappings_to_add_spns.to_csv(f"{self.log_file_dir}mappings_to_add_SPNs.csv")
+        #     if not self.is_dryrun:
+        #         await self.remove_dbx_group_mappings(mappings_to_remove_spns)
+        #         await self.add_dbx_group_mappings(mappings_to_add_spns, group_master_df, users_df_dbx)
+        #         mappings_to_remove_spns.to_csv(f"{self.log_file_dir}mappings_to_remove_SPNs.csv")
+        #         mappings_to_add_spns.to_csv(f"{self.log_file_dir}mappings_to_add_SPNs.csv")
 
 
     async def deactivate_deleted_users(self):
