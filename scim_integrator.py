@@ -2579,11 +2579,12 @@ class scim_integrator():
         #     if row['type'] == 'ServicePrincipal':
         #         users_df_dbx.iloc[idx]['userName'] = str(row['displayName']).lower()
 
-        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower())
-        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower())
-        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'displayName']
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower() if x is not None else x)
+        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower() if x is not None else x)
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'displayName'].apply(lambda x: x.lower() if x is not None else x)
 
-        users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'userName'] = users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'displayName'].apply(lambda x: x.lower())
+        
+        users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'userName'] = users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'displayName'].apply(lambda x: x.lower() if x is not None else x)
 
         users_df_aad['aad_group_displayName'] = users_df_aad['aad_group_displayName'].apply(lambda s:s.lower() if type(s) == str else s)
 
