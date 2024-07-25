@@ -2568,7 +2568,7 @@ class scim_integrator():
         users_df_aad = self.get_all_groups_aad(True)
         # lower case for join
         users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
-        users_df_aad = users_df_aad.reset_index(drop = True)
+        users_df_aad = users_df_aad.reset_index(drop = True) 
         # If child groups are present, then the join would fail since userPrincipalNames are Nan. For groups, force the join through displayName
         # for idx,row in users_df_aad.iterrows():
         #     if row['@odata.type'] == '#microsoft.graph.group':
@@ -2581,7 +2581,9 @@ class scim_integrator():
 
         users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower() if x is not None else x)
         users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower() if x is not None else x)
-        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == 'none'), 'displayName'].apply(lambda x: x.lower() if x is not None else x)
+        
+        users_df_aad['userPrincipalName'].fillna('', inplace=True)
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == ''), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == ''), 'displayName'].apply(lambda x: x.lower() if x is not None else x)
 
         
         users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'userName'] = users_df_dbx.loc[users_df_dbx['type'] =='ServicePrincipal', 'displayName'].apply(lambda x: x.lower() if x is not None else x)
