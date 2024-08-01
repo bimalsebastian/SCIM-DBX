@@ -2570,7 +2570,7 @@ class scim_integrator():
         users_df_aad['userPrincipalName'] = users_df_aad['userPrincipalName'].apply(lambda s:s.lower() if type(s) == str else s)
         users_df_aad = users_df_aad.reset_index(drop = True) 
         # If child groups are present, then the join would fail since userPrincipalNames are Nan. For groups, force the join through displayName
-        # for idx,row in users_df_aad.iterrows():
+        # for idx,row in users_df_aad.iterrows():just
         #     if row['@odata.type'] == '#microsoft.graph.group':
         #         users_df_aad.iloc[idx]['userPrincipalName'] = str(row['displayName']).lower()
         #     elif row['@odata.type'] == '#microsoft.graph.servicePrincipal':
@@ -2580,7 +2580,8 @@ class scim_integrator():
         #         users_df_dbx.iloc[idx]['userName'] = str(row['displayName']).lower()
 
         users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.group', 'displayName'].apply(lambda x: x.lower() if x is not None else x)
-        users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'userPrincipalName'] = users_df_aad.loc[users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal', 'appDisplayName'].apply(lambda x: x.lower() if x is not None else x)
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['appDisplayName']!= 'None'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['appDisplayName']!= 'None'), 'appDisplayName'].apply(lambda x: x.lower() if x is not None else x)
+        users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['appDisplayName']== 'None'), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['appDisplayName']== 'None'), 'displayName'].apply(lambda x: x.lower() if x is not None else x)
         
         users_df_aad['userPrincipalName'].fillna('', inplace=True)
         users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == ''), 'userPrincipalName'] = users_df_aad.loc[(users_df_aad['@odata.type'] =='#microsoft.graph.servicePrincipal') & (users_df_aad['userPrincipalName'] == ''), 'displayName'].apply(lambda x: x.lower() if x is not None else x)
